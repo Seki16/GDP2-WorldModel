@@ -1,0 +1,21 @@
+# --- Safe Ignored Folders ---
+/data/
+/data/raw/
+/data/processed/
+
+# --- Heavy Files (Anywhere) ---
+*.pkl
+*.pt
+*.pth
+
+# --- Python & System Junk ---
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# --- Environment ---
+.env
+venv/
+.idea/
+.vscode/

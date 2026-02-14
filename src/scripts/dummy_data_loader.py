@@ -1,4 +1,6 @@
 """
+# B.0
+
 Generate and Load Dummy Data for Training
 
 Example Usage
@@ -17,7 +19,7 @@ IMG_SHAPE = (3, 64, 64)
 DEFAULT_DEVICE = "cpu"
 
 def generate_dummy_batch(batch_size, 
-                         device="cpu", 
+                         device=torch.device("cpu"), 
                          return_images=False, 
                          return_latents=True, 
                          return_actions=True,
@@ -57,7 +59,7 @@ def generate_dummy_batch(batch_size,
         results.append(actions)
         
     if return_rewards:
-        rewards = torch.radn(batch_size, SEQUENCE_LENGTH, 1)
+        rewards = torch.randn(batch_size, SEQUENCE_LENGTH, 1)
         results.append(rewards)
     
     if len(results) == 1:
@@ -67,7 +69,7 @@ def generate_dummy_batch(batch_size,
 
 def dummy_loader(num_batches, 
                  batch_size, 
-                 device="cpu",
+                 device=torch.device("cpu"),
                  return_images=False,
                  return_latents=True,
                  return_actions=True,

@@ -1,0 +1,9 @@
+DQN Baseline Summary (MazeEnv)
+- Episodes logged: 315
+- Best episode return: 0.7200
+- Avg return (last 50 eps): -0.5668
+- Avg episode length (last 50 eps): 62.74
+
+Files produced:
+- evaluation/baseline_return_curve.png
+- evaluation/baseline_summary.txt

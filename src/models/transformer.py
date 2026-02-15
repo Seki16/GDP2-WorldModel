@@ -6,71 +6,6 @@ from transformer_configuration import TransformerWMConfiguration as Config
 import dummy_data_loader as DummyDataLoader
 import math
 
-"""
-class WorldModel(nn.Module):
-    def __init__(self, config=Config.TransformerWMConfiguration):
-        super().__init__()
-        self.action_embed = nn.Embedding(config.ACTION_DIM, config.ACTION_EMBED_DIM)
-
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=config.LATENT_DIM,
-                nhead=config.NUM_HEADS,
-                batch_first=True
-            ),
-            num_layers=config.NUM_LAYERS
-        )
-        
-        self.next_latent_head = nn.Linear(config.LATENT_DIM, config.LATENT_DIM)
-        self.reward_head = nn.Linear(config.LATENT_DIM, 1)
-        self.value_head = nn.Linear(config.LATENT_DIM, 1)
-        
-    def forward(self, latents, actions):
-        a_embed = self.action_embed(actions)
-        x = latents + a_embed
-        
-        h = self.transformer(x)
-        
-        pred_next_latents = self.next_latent_head(h) # (batch_size, SEQUENCE_LENGTH, 384)
-        pred_rewards = self.reward_head(h) # (batch_size, SEQUENCE_LENGTH, 1)
-        pred_values = self.value_head(h)
-        
-        return pred_next_latents, pred_rewards, pred_values
-    
-    @torch.no_grad()
-    def rollout(self, z0, actions):
-        """ """
-        Roll out future latent states from initial state z0
-        with sequence of future actions actions.
-        
-        :param self: -
-        :param z0: (batch_size, 1, LATENT_DIM)
-        :param actions: (batch_size, horizon length)
-        :param returns: (batch_size, horizon length, LATENT_DIM)
-        """ """
-        BATCH_SIZE, SEQUENCE_LENGTH = actions.shape
-        
-        latent_hist = z0 # (batch_size, 1, 384)
-        action_hist = []
-        
-        preds = []
-        
-        for t in range(SEQUENCE_LENGTH):
-            a_t = actions[:, t:t+1] # (batch_size, 1)
-            action_hist.append(a_t)
-            
-            a_seq = torch.cat(action_hist, dim=1)
-            
-            pred_latents, _, _ = self.forward(latent_hist, a_seq)
-            
-            z_next = pred_latents[:, -1:] # Take predicted step (B, 1, LATENT_DIM)
-            
-            latent_hist = torch.cat([latent_hist, z_next], dim=1)
-            preds.append(z_next)
-            
-        return torch.cat(preds, dim=1) # (batch_size, horizon_length, LATENT_DIM)
-"""
-######################################
 
 """
 Usage:
@@ -320,7 +255,7 @@ class DinoWorldModel(nn.Module):
         
         #
         for t in range(sequence_length):
-            # Add aciton to history
+            # Add action to history
             a_t = actions[:, t:t+1] # (batch_size, 1)
             action_hist.append(a_t)
             
@@ -436,8 +371,8 @@ class CEMPlanner:
         self,
         model,
         action_dim=4,
-        horizon=8,
-        num_candidates=64,
+        horizon=16,
+        num_candidates=8,
         num_elites=8,
         num_iters=4,
         gamma=0.99,

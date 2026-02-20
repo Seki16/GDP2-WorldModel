@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from transformer_configuration import TransformerWMConfiguration as Config
-import dummy_data_loader as DummyDataLoader
+from .transformer_configuration import TransformerWMConfiguration as Config
 import math
 
 
@@ -117,21 +116,30 @@ class Attention(nn.Module):
         q = apply_rope(q)
         k = apply_rope(k)
         
+        # Transpose for attention: (B, H, T, D)
+        q = q.transpose(1, 2)  # (B, heads, T, head_dim)
+        k = k.transpose(1, 2)  # (B, heads, T, head_dim)
+        v = v.transpose(1, 2)  # (B, heads, T, head_dim)
+        
         # Attention scores, each token compares with every previous token
         attn = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # attn shape: (B, heads, T, T)
         
         # Causal mask to prevent seeing future tokens
-        mask = causal_mask(sequence_length, x.device)
-        attn = attn.masked_fill(mask[None, :, None, :], -1e9)
+        mask = causal_mask(sequence_length, x.device)  # (T, T)
+        attn = attn.masked_fill(mask[None, None, :, :], -1e9)
+        # broadcast mask to (1, 1, T, T) -> (B, heads, T, T)
         
         # Attention weights sum to 1 over past tokens
         attn = attn.softmax(dim=-1)
         
         # Weighted value aggregation
-        # Each token's new representation is a weighted sum of value vectors from previous tokens
-        out = attn @ v
-        # Merge heads
+        out = attn @ v  # (B, heads, T, head_dim)
+        
+        # Transpose back and merge heads
+        out = out.transpose(1, 2).contiguous()  # (B, T, heads, head_dim)
         out = out.reshape(batch_size, sequence_length, latent_dim)
+        
         # Final Projection
         return self.proj(out)
     
@@ -520,230 +528,6 @@ def train_step(model, optimizer, latents, actions, device=torch.device("cpu")):
     
     return loss.item()
 
-"""
-Training loop with dummy data and rollout testing
-"""
-
-def train_dummy_world_model(epochs=5, 
-                            num_batches=10, 
-                            batch_size=32, 
-                            rollout_horizon=16,
-                            device=Config.DEVICE):
-    print("Starting Dummy Training")
-    
-    # Initilizse
-    config = Config()
-    model = DinoWorldModel(config).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
-    
-    # Epoch loop
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        # Batch loop with dummy data
-        for latents, actions in DummyDataLoader.dummy_loader(num_batches, batch_size, device):
-            loss_val = train_step(model, optimizer, latents, actions, device)
-            epoch_loss += loss_val
-            
-        # Avg loss
-        print(f"Epoch {epoch+1}/{epochs} | Avg Loss: {epoch_loss/num_batches:.4f}")
-
-        # Imagination / Rollout Test
-        z0 = torch.randn(batch_size, 1, Config.LATENT_DIM, device=device)
-        
-        # future_actions = torch.randint(0, Config.ACTION_DIM, (batch_size, rollout_horizon), device=device)
-        # 5 sequences per batch for testing
-        future_actions_candidates = torch.randint(0, Config.ACTION_DIM, (batch_size, 5, rollout_horizon))
-        
-        # Single
-        #pred_latents, pred_rewards, pred_values = model.rollout(z0, future_actions)
-        
-        # Multi candidates
-        pred_latents, pred_rewards, pred_values = model.rollout_candidates(z0, future_actions_candidates)
-        
-        # Score candidates
-        returns = score_action_sequences(pred_rewards)
-        # Best candidate per batch
-        best_id = returns.argmax(dim=1)
-        
-        print("Returns shape:", returns.shape)     # (B, N)
-        print("Best candidate per batch:", best_id)
-        
-        print(f"Rollout shapes | latents: {pred_latents.shape}, rewards: {pred_rewards.shape}, values: {pred_values.shape}")
-        
-    print("=== Dummy Training Completed ===")
-    return model
-     
-            
-"""
-device = "cuda" if torch.cuda.is_available() else "cpu"
-evaluate_dummy_world_model(model, batch_size=16, rollout_horizon=10, device=device)
-"""            
 
 
-def evaluate_dummy_world_model(model, batch_size=32, rollout_horizon=16, device=torch.device("cpu")):
-    """
-    Evaluate trained world model with dummy data
-    
-    :param model: Trained world model to evaluate
-    :param batch_size: Number of parallel rollouts to test
-    :param rollout_horizon: Number of time steps to rollout into the future
-    :param device: device
-    """
-    
-    model.eval()
-    
-    # Generate dummy initial latent and action states for rollout
-    z0 = torch.randn(batch_size, 1, Config.LATENT_DIM, device=device)
-    future_actions = torch.randint(0, Config.ACTION_DIM, (batch_size, rollout_horizon), device=device)
-    
-    # Rollout future latents, rewards and values from the model
-    pred_latents, pred_rewards, pred_values = model.rollout(z0, future_actions)
-    
-    assert pred_latents.shape == (batch_size, rollout_horizon, Config.LATENT_DIM), "Latent shape mismatch"
-    assert pred_rewards.shape == (batch_size, rollout_horizon, 1), "Reward shape mismatch"
-    assert pred_values.shape == (batch_size, rollout_horizon, 1), "Value shape mismatch"
 
-    
-    print("✅ Rollout shapes correct:")
-    print(f"Latents: {pred_latents.shape}, Rewards: {pred_rewards.shape}, Values: {pred_values.shape}")
-
-    # --- Quick numerical sanity check ---
-    print("\n--- Latent stats ---")
-    print(f"min: {pred_latents.min():.3f}, max: {pred_latents.max():.3f}, mean: {pred_latents.mean():.3f}")
-    
-    print("\n--- Reward stats ---")
-    print(f"min: {pred_rewards.min():.3f}, max: {pred_rewards.max():.3f}, mean: {pred_rewards.mean():.3f}")
-    
-    print("\n--- Value stats ---")
-    print(f"min: {pred_values.min():.3f}, max: {pred_values.max():.3f}, mean: {pred_values.mean():.3f}")
-
-    print("\n✅ Sanity check passed: no crashes, shapes and stats look reasonable.\n")
-    
-"""
-if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, latents, actions = overfit_single_batch(
-        batch_size=32,
-        sequence_length=16,
-        epochs=200,
-        device=device
-    )
-"""    
-
-def overfit_single_batch(
-    model=None,
-    batch_size=32,
-    sequence_length=16,
-    latent_dim=Config.LATENT_DIM,
-    action_dim=Config.ACTION_DIM,
-    lr=1e-3,
-    epochs=200,
-    device=Config.DEVICE
-):
-    """
-    Overfits the world model on a single random batch.
-    Loss should approach 0 if everything works.
-    """
-    
-    device = torch.device(device)
-    
-    # Generate single dummy batch
-    latents = torch.randn(batch_size, sequence_length, latent_dim, device=device)
-    actions = torch.randint(0, action_dim, (batch_size, sequence_length), device=device)
-    
-    # Initialize model if not provided
-    if model is None:
-        config = Config()
-        model = DinoWorldModel(config).to(device)
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    
-    print("Starting overfit on single batch...")
-    
-    for epoch in range(epochs):
-        loss_val = train_step(model, optimizer, latents, actions, device)
-        
-        # Logging
-        if epoch % 10 == 0 or epoch == epochs - 1:
-            print(f"Epoch {epoch+1}/{epochs} | Loss: {loss_val:.6f}")
-        
-        # Optional early stop
-        if loss_val < 1e-6:
-            print(f"Early stopping at epoch {epoch+1}, loss < 1e-6")
-            break
-    
-    # Rollout check
-    model.eval()
-    with torch.no_grad():
-        z_in = latents[:, :-1]
-        a_in = actions[:, :-1]
-        pred_latents, pred_rewards, pred_values = model(z_in, a_in)
-        
-        mse = F.mse_loss(pred_latents, latents[:, 1:]).item()
-        print(f"\nRollout MSE on single batch after overfit: {mse:.8f}")
-        
-        # Optional: print min/max/mean differences
-        diff = pred_latents - latents[:, 1:]
-        print(f"Latent diff | min: {diff.min():.6f}, max: {diff.max():.6f}, mean: {diff.mean():.6f}")
-    
-    
-    print("=== Overfit + Rollout completed ===")
-    return model, latents, actions, pred_latents, pred_rewards, pred_values
-
-"""
-Overfit multiple batches
-"""    
-def demo_overfit_mpc(model, batch_size=4, horizon=5, num_candidates=16, num_elites=4, device=Config.DEVICE):
-    """
-    Demonstrates MPC planning using CEM on an overfitted world model.
-    """
-    device = torch.device(device)
-    
-    model.eval()
-    
-    # Initial latent (from overfit batch or random)
-    z0 = torch.randn(batch_size, 1, Config.LATENT_DIM, device=device)
-    
-    # Initialize CEM planner
-    planner = CEMPlanner(
-        model=model,
-        action_dim=Config.ACTION_DIM,
-        horizon=horizon,
-        num_candidates=num_candidates,
-        num_elites=num_elites,
-        num_iters=5,
-        gamma=0.99,
-        device=device
-    )
-    
-    # Wrap planner in MPC controller
-    mpc = MPCController(planner)
-    
-    # Select action
-    action = mpc.act(z0)
-    
-    print("=== MPC / CEM Demo ===")
-    print(f"Initial latent shape: {z0.shape}")
-    print(f"Selected action per batch: {action}")  # (B,)
-    print(f"Action type: {action.dtype}, min: {action.min().item()}, max: {action.max().item()}")
-    print("======================\n")
-    
-    return action
-
-
-    
-
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = train_dummy_world_model(
-        epochs=3,
-        num_batches=5,
-        batch_size=32,
-        rollout_horizon=16,
-        device=device
-    )
-    
-    evaluate_dummy_world_model(model,
-                               batch_size=32,
-                               rollout_horizon=16,
-                               device=device)

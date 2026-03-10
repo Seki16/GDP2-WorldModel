@@ -274,5 +274,4 @@ python -m src.scripts.check_deltas
 | `src/utils/visualizer.py` | All plot generation functions | `evaluate_world_model.py` |
 | `tests/test_shapes.py` | Asserts all tensor shapes match the interface contract | CI / Checkpoint 2 |
 | `tests/test_env.py` | Asserts maze env returns (64,64,3) obs and steps without crash | CI / Checkpoint 1 |
-| `tests/test_integration.py` | Full E.3 pipeline: buffer → model → loss → 1 epoch no crash | CI / E.3 DoD |#   r u l e s e t   t e s t  
- 
+| `tests/test_integration.py` | Full E.3 pipeline: buffer → model → loss → 1 epoch no crash | CI / E.3 DoD |

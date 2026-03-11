@@ -1,0 +1,7 @@
+| Parameter | What it is | What we except to change | Observed changes |
+| --------- | ---------- | ------------------------ | ---------------- |
+| Attention Heads | Separate parallel attention mechanisms that allow a model to focus on different relationships in an input sequence. | We expect the world model to learn more structural aspects of the scene as attention heads increase, but too high of a value will result in some attention heads learning similar stuff. | Dino-world uses 12 as a base, so we first attempt with 12 attention heads. |
+| MLP Ratio | The MLP ratio controls how much the transformer expands token representations inside its feed-forward network, determining how powerful the model’s nonlinear feature processing is. | Decreasing will reduce the models ability to compute complex features. | We use 4 as a starting point just like dino-world. |
+| Horizon | How many frames we imagine ahead before stopping | No clue. Need to experiment. Longer horizons give poorer images due to accumulating error. | Use H = 25 as a starting point |
+| Batch Size | Batch size is the number of training examples the model processes in one forward/backward pass before updating its weights. | Increasing speeds up training but uses more VRAM, but lower makes training longer. | Use 1024 as a starting point (dino-world) |
+| Learning Rate | Hyper parameter | No idea. | Dino-world uses 10^-4, but after the warmup. |  

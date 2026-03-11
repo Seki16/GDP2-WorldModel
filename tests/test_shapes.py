@@ -96,18 +96,40 @@ def test_buffer_shape():
         # Seed buffer with synthetic latent episodes
         rng = np.random.default_rng(42)
         for _ in range(20):
-            episode = rng.standard_normal((SEQ_LEN + 5, LATENT_DIM)).astype(np.float32)
-            buf.add_episode(episode)
+            T = SEQ_LEN + 5
+            buf.add_episode(
+                latents = rng.standard_normal((T, LATENT_DIM)).astype(np.float32),
+                actions = rng.integers(0, ACTION_DIM, size=(T,)).astype(np.float32),
+                rewards = rng.standard_normal((T,)).astype(np.float32),
+                dones   = rng.integers(0, 2, size=(T,)).astype(np.float32),
+            )
 
         batch = buf.sample(BATCH_SIZE, seq_len=SEQ_LEN)
 
-        check("output is a Tensor",           isinstance(batch, torch.Tensor))
-        check(f"shape == ({BATCH_SIZE}, {SEQ_LEN}, {LATENT_DIM})",
-              batch.shape == (BATCH_SIZE, SEQ_LEN, LATENT_DIM), str(batch.shape))
-        check("dtype is float32",             batch.dtype == torch.float32)
-        check("no NaN values",                not torch.isnan(batch).any())
-        check("non-zero variance",            batch.var().item() > 1e-6,
-              f"var={batch.var().item():.6f}")
+        # Latents
+        check("latents is a Tensor",          isinstance(batch.latents, torch.Tensor))
+        check(f"latents shape == ({BATCH_SIZE}, {SEQ_LEN}, {LATENT_DIM})",
+              batch.latents.shape == (BATCH_SIZE, SEQ_LEN, LATENT_DIM), str(batch.latents.shape))
+        check("latents dtype is float32",     batch.latents.dtype == torch.float32)
+        check("no NaN in latents",            not torch.isnan(batch.latents).any())
+        check("non-zero variance",            batch.latents.var().item() > 1e-6,
+              f"var={batch.latents.var().item():.6f}")
+
+        # Actions
+        check("actions is a Tensor",          isinstance(batch.actions, torch.Tensor))
+        check(f"actions shape == ({BATCH_SIZE}, {SEQ_LEN})",
+              batch.actions.shape == (BATCH_SIZE, SEQ_LEN), str(batch.actions.shape))
+
+        # Rewards
+        check("rewards is a Tensor",          isinstance(batch.rewards, torch.Tensor))
+        check(f"rewards shape == ({BATCH_SIZE}, {SEQ_LEN})",
+              batch.rewards.shape == (BATCH_SIZE, SEQ_LEN), str(batch.rewards.shape))
+
+        # Dones
+        check("dones is a Tensor",            isinstance(batch.dones, torch.Tensor))
+        check(f"dones shape == ({BATCH_SIZE}, {SEQ_LEN})",
+              batch.dones.shape == (BATCH_SIZE, SEQ_LEN), str(batch.dones.shape))
+
 
     except ImportError:
         print(f"  ⚠️  Skipping: src.data.buffer not importable")

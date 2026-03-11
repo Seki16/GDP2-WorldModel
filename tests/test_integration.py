@@ -11,13 +11,29 @@ Run with:
     python -m src.tests.test_integration
 """
 
+
+
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+
+# Notebook-safe project root detection
+_here = os.getcwd()
+while not os.path.isdir(os.path.join(_here, "src")):
+    _parent = os.path.dirname(_here)
+    if _parent == _here:
+        raise RuntimeError("Could not find project root (no 'src/' found)")
+    _here = _parent
+
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+
+print(f"[INFO] Project root: {_here}")
 
 # ── Imports with graceful fallback ────────────────────────────────────────────
 
@@ -68,11 +84,18 @@ def test_buffer_shape():
         buf = LatentReplayBuffer(capacity_steps=50_000)
         # Seed it with a few synthetic episodes
         for _ in range(20):
-            buf.add_episode(np.random.randn(T + 5, LATENT_DIM).astype("float32"))
-        out = buf.sample(B, seq_len=T)
+            T_ep = T + 5 # episode length slightly longer than seq_len
+            buf.add_episode(
+                latents = np.random.randn(T_ep, LATENT_DIM).astype("float32"),
+                actions = np.random.randint(0, ACTION_DIM, size=(T_ep,)).astype("float32"),
+                rewards = np.random.randn(T_ep).astype("float32"),
+                dones   = np.zeros(T_ep, dtype="float32"),
+            )
+        batch = buf.sample(B, seq_len=T)
+        out   = batch.latents
     else:
-        buf = _MockBuffer()
-        out = buf.sample(B, T)
+        batch = _MockBuffer().sample(B, T)
+        out   = batch.latents
 
     check("output is a Tensor",     isinstance(out, torch.Tensor))
     check("shape (B, T, 384)",      out.shape == (B, T, LATENT_DIM),
@@ -127,11 +150,25 @@ def test_loss_finite():
 def test_one_epoch_no_crash():
     """E.3 core test: 1 epoch × 10 batches runs without any exception."""
     print("\n[TEST] E.3 — Full pipeline, 1 epoch × 10 batches")
+    import numpy as np
     device = torch.device("cpu")
 
     buffer, model, optimizer, scheduler, loss_fn = build_components(
-        device, use_real=True   # will auto-fall-back if modules absent
+        device, use_real=True
     )
+
+    # Seed buffer if real — build_components leaves it empty
+    if REAL_BUFFER:
+        import numpy as np
+        for _ in range(20):
+            T_ep = SEQ_LEN + 5
+            buffer.add_episode(
+                latents = np.random.randn(T_ep, LATENT_DIM).astype("float32"),
+                actions = np.random.randint(0, ACTION_DIM, size=(T_ep,)).astype("float32"),
+                rewards = np.random.randn(T_ep).astype("float32"),
+                dones   = np.zeros(T_ep, dtype="float32"),
+            )
+
     stats = train_epoch(
         model, buffer, optimizer, loss_fn,
         device, batch_size=8, batches_per_epoch=10,

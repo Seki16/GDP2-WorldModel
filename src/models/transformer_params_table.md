@@ -1,4 +1,4 @@
-| Parameter | What it is | What we except to change | Observed changes |
+| Parameter | What it is | What we expect to change | Observed changes |
 | --------- | ---------- | ------------------------ | ---------------- |
 | Attention Heads | Separate parallel attention mechanisms that allow a model to focus on different relationships in an input sequence. | We expect the world model to learn more structural aspects of the scene as attention heads increase, but too high of a value will result in some attention heads learning similar stuff. | Dino-world uses 12 as a base, so we first attempt with 12 attention heads. |
 | MLP Ratio | The MLP ratio controls how much the transformer expands token representations inside its feed-forward network, determining how powerful the model’s nonlinear feature processing is. | Decreasing will reduce the models ability to compute complex features. | We use 4 as a starting point just like dino-world. |

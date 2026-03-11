@@ -24,7 +24,12 @@ def load_buffer(data_dir: str):
     for f in files[:100]:  # Load 100 episodes
         d = np.load(f)
         if "latents" in d:
-            buf.add_episode(d["latents"])
+            buf.add_episode(
+            latents = d["latents"],
+            actions = d["actions"],
+            rewards = d["rewards"],
+            dones   = d["dones"],
+        )
     return buf
 
 

@@ -60,7 +60,7 @@ class LatentReplayBuffer:
         
         self.episodes.append(Episode(
             latents = latents.astype(np.float32),
-            actions = actions.astype(np.float32),
+            actions = actions.astype(np.int64),
             rewards = rewards.astype(np.float32).reshape(T),
             dones = dones.astype(np.float32).reshape(T)
         ))
@@ -69,7 +69,8 @@ class LatentReplayBuffer:
 
         # Evict oldest episodes to stay within capacity
         while self.total_steps > self.capacity_steps:
-            self.total_steps -= self.episodes.pop(0).shape[0]
+            popped = self.episodes.pop(0)
+            self.total_steps -= popped.latents.shape[0]
 
     def sample(self, batch_size: int, seq_len: int) -> Batch:
         """

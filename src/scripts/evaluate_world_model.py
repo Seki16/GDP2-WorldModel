@@ -60,8 +60,16 @@ def load_buffer(data_dir: str) -> LatentReplayBuffer:
     files = sorted(Path(data_dir).glob("*.npz"))
     for f in files:
         d = np.load(f)
-        if "latents" in d:
-            buf.add_episode(d["latents"])
+        missing = [k for k in ("latents", "actions", "rewards", "dones") if k not in d]
+        if missing:
+            print(f"[SKIP] {f.name} — missing keys: {missing}")
+            continue
+        buf.add_episode(
+            latents = d["latents"],
+            actions = d["actions"],
+            rewards = d["rewards"],
+            dones   = d["dones"],
+        )
     print(f"[INFO] Buffer: {len(buf.episodes)} episodes, {buf.total_steps} steps")
     return buf
 
@@ -75,8 +83,9 @@ def run_rollout(model, buffer, device, batch_size=32):
         pred_latents   : (B, T-1, 384)
         actual_latents : (B, T-1, 384)
     """
-    latents = buffer.sample(batch_size, seq_len=SEQ_LEN).to(device)  # (B, T, 384)
-    actions = torch.randint(0, ACTION_DIM, (batch_size, SEQ_LEN), device=device)
+    batch   = buffer.sample(batch_size, seq_len=SEQ_LEN)
+    latents = batch.latents.to(device)       # (B, T, 384)
+    actions = batch.actions.long().to(device) # (B, T) — real actions from buffer
 
     z_in     = latents[:, :-1]    # (B, T-1, 384)
     a_in     = actions[:, :-1]    # (B, T-1)

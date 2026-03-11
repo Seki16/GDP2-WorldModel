@@ -125,7 +125,7 @@ def main():
     cfg = MazeConfig(
         grid_size=args.grid_size,
         max_steps=args.max_steps,
-        obs_size=60,
+        obs_size=64,
         wall_prob=args.wall_prob,
         seed=args.maze_seed,
     )

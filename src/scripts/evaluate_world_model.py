@@ -70,6 +70,9 @@ def load_buffer(data_dir: str) -> LatentReplayBuffer:
             rewards = d["rewards"],
             dones   = d["dones"],
         )
+        
+        d.close()
+        
     print(f"[INFO] Buffer: {len(buf.episodes)} episodes, {buf.total_steps} steps")
     return buf
 

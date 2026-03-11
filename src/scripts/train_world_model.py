@@ -148,6 +148,8 @@ def load_buffer_from_disk(buffer: "LatentReplayBuffer", processed_dir: Path) -> 
             dones   = data["dones"]      # (T,)
         )
         loaded += 1
+        
+        data.close()  # Free memory immediately after loading each episode
 
     print(f"[INFO] Loaded {loaded}/{len(files)} episodes | "
           f"Buffer steps: {buffer.total_steps}")
@@ -185,13 +187,12 @@ def train_epoch(model, buffer, optimizer, loss_fn, device,
         optimizer.zero_grad()
         pred_next, pred_rew, pred_done = model(z_in, a_in)
         
-        """
-        binary_cross_entropy_with_logits not binary_cross_entropy 
-        — the model's done head outputs raw logits, so the _with_logits 
-        variant is numerically safer (fuses sigmoid + BCE in one pass). 
-        The .clamp(0, 1) on d_target is a safety guard in case dones 
-        arrive as floats slightly outside that range.
-        """
+        
+        # binary_cross_entropy_with_logits not binary_cross_entropy 
+        # — the model's done head outputs raw logits, so the _with_logits 
+        # variant is numerically safer (fuses sigmoid + BCE in one pass). 
+        # The .clamp(0, 1) on d_target is a safety guard in case dones 
+        # arrive as floats slightly outside that range.
         
         
         loss_latent = loss_fn(pred_next, z_target)

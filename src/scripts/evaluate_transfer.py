@@ -94,7 +94,7 @@ def make_env(args) -> tuple[MazeEnv, np.ndarray]:
     cfg = MazeConfig(
         grid_size=args.grid_size,
         max_steps=args.max_steps,
-        obs_size=60,
+        obs_size=64,
         wall_prob=args.wall_prob,
         seed=args.maze_seed,
     )
@@ -299,7 +299,7 @@ def main():
     if dqn_path.exists():
         print(f"\n[INFO] Loading DQN from {dqn_path}")
         ckpt     = torch.load(dqn_path, map_location=device)
-        obs_size = ckpt.get("obs_size", 60)
+        obs_size = ckpt.get("obs_size", 64)
         dqn      = TinyCNN(n_actions=4, obs_size=obs_size).to(device)
         dqn.load_state_dict(ckpt.get("model_state", ckpt))
         dqn.eval()

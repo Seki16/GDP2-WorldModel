@@ -154,11 +154,10 @@ def run_drift_diagnostic(
     seed_episodes: list,
     device:        torch.device,
     rollout_steps: int = ROLLOUT_STEPS,
-    action_dim:    int = ACTION_DIM,
 ) -> np.ndarray:
     """
-    For each seed episode, run an autoregressive rollout for rollout_steps.
-    At each step h, compute MSE between pred_latent[h] and true_latent[h].
+    For each seed episode, run an autoregressive rollout for rollout_steps,
+    replaying the episode's recorded actions for a fair MSE comparison.
 
     Returns
     -------
@@ -171,10 +170,17 @@ def run_drift_diagnostic(
     model.eval()
     with torch.no_grad():
         for s, ep in enumerate(seed_episodes):
-            # Ground-truth latents for this episode: (rollout_steps+1, 384)
+            # Ground-truth latents: (rollout_steps+1, 384)
             gt = torch.tensor(
                 ep.latents[: rollout_steps + 1],
                 dtype=torch.float32,
+                device=device,
+            )
+
+            # Recorded actions: (rollout_steps,) — replay these exactly
+            recorded_actions = torch.tensor(
+                ep.actions[: rollout_steps],
+                dtype=torch.long,
                 device=device,
             )
 
@@ -182,15 +188,15 @@ def run_drift_diagnostic(
             z_current = gt[0].unsqueeze(0).unsqueeze(0)
 
             for h in range(rollout_steps):
-                # Sample a random action for this step — (1, 1)
-                a = torch.randint(0, action_dim, (1, 1), device=device)
+                # Replay recorded action — (1, 1)
+                a = recorded_actions[h].unsqueeze(0).unsqueeze(0)
 
                 # One-step forward pass
                 pred_next, _, _ = model(z_current, a)   # (1, 1, 384)
 
                 # MSE against ground-truth next latent
-                gt_next  = gt[h + 1].unsqueeze(0).unsqueeze(0)   # (1, 1, 384)
-                mse      = torch.mean((pred_next - gt_next) ** 2).item()
+                gt_next = gt[h + 1].unsqueeze(0).unsqueeze(0)   # (1, 1, 384)
+                mse     = torch.mean((pred_next - gt_next) ** 2).item()
                 mse_matrix[s, h] = mse
 
                 # Autoregressive: feed prediction back as next input
@@ -321,10 +327,14 @@ def main():
 
     # 5. Report
     print("\n─── Drift Report " + "─" * 41)
-    print(f"  Step-1  MSE (baseline) : {mean_mse[0]:.6f}")
-    print(f"  Step-10 MSE            : {mean_mse[9]:.6f}")
-    print(f"  Step-25 MSE            : {mean_mse[24]:.6f}")
-    print(f"  Step-50 MSE            : {mean_mse[49]:.6f}")
+    if len(mean_mse) > 0:
+        print(f"  Step-1  MSE (baseline) : {mean_mse[0]:.6f}")
+        
+    # Conditionally report additional steps if they are within the rollout.
+    for step in (10, 25, 50):
+        idx = step - 1  # zero-based index
+        if idx < len(mean_mse):
+            print(f"  Step-{step:<2} MSE            : {mean_mse[idx]:.6f}")
 
     if threshold_step is not None:
         print(f"\n  ⚠️  MSE exceeds 2× baseline at step {threshold_step + 1}  "

@@ -214,7 +214,8 @@ class WorldModelEnv(gym.Env):
         truncated   : bool                 — step limit reached
         info        : dict  {step, done_logit}
         """
-        assert self._z is not None, "Call reset() before step()."
+        if self._z is None:
+            raise gym.error.ResetNeeded("Call reset() before step().")
 
         # ── Build single-step tensors ─────────────────────────────────────────
         a_in = torch.tensor(

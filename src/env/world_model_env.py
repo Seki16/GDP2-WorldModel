@@ -217,6 +217,14 @@ class WorldModelEnv(gym.Env):
         if self._z is None:
             raise gym.error.ResetNeeded("Call reset() before step().")
 
+        # ── Validate action ───────────────────────────────────────────────────
+        if not self.action_space.contains(np.int64(action)):
+            raise ValueError(
+                f"Invalid action {action!r}. "
+                f"Expected an integer in [0, {ACTION_DIM - 1}], "
+                f"got {action} (type={type(action).__name__})."
+            )
+        
         # ── Build single-step tensors ─────────────────────────────────────────
         a_in = torch.tensor(
             [[int(action)]], dtype=torch.long, device=self.device,

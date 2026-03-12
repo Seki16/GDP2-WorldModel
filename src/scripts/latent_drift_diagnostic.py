@@ -105,19 +105,20 @@ def load_buffer(data_dir: Path) -> "LatentReplayBuffer":
 
     loaded = 0
     for fpath in files:
-        data    = np.load(fpath)
-        missing = [k for k in ("latents", "actions", "rewards", "dones")
-                   if k not in data]
-        if missing:
-            print(f"[SKIP] {fpath.name} — missing keys: {missing}")
-            continue
-        buf.add_episode(
-            latents = data["latents"],
-            actions = data["actions"],
-            rewards = data["rewards"],
-            dones   = data["dones"],
-        )
-        loaded += 1
+
+        with np.load(fpath) as data:
+            missing = [k for k in ("latents", "actions", "rewards", "dones")
+                       if k not in data]
+            if missing:
+                print(f"[SKIP] {fpath.name} — missing keys: {missing}")
+                continue
+            buf.add_episode(
+                latents = data["latents"],
+                actions = data["actions"],
+                rewards = data["rewards"],
+                dones   = data["dones"],
+            )
+            loaded += 1
 
     print(f"[INFO] Loaded {loaded}/{len(files)} episodes  "
           f"total_steps={buf.total_steps}")
@@ -128,10 +129,16 @@ def load_buffer(data_dir: Path) -> "LatentReplayBuffer":
 
 def get_seed_episodes(buffer: "LatentReplayBuffer", n_seeds: int, rollout_steps: int):
     """
-    Return n_seeds episodes that are long enough for a full rollout.
-    Each is a np.ndarray of shape (T, 384) with T >= rollout_steps + 1.
+    Return n_seeds Episode namedtuples that are long enough for a full rollout.
+    Each Episode has fields: .latents (T, 384), .actions (T,), .rewards (T,), .dones (T,).
+    Access latents via ep.latents, actions via ep.actions, etc.
 
     Episodes are spaced evenly across the buffer so seeds are diverse.
+    Requires at least n_seeds episodes with T >= rollout_steps + 1 steps.
+
+    Returns
+    -------
+    list of Episode namedtuples, length n_seeds
     """
     candidates = [ep for ep in buffer.episodes
                   if ep.latents.shape[0] >= rollout_steps + 1]
@@ -154,11 +161,11 @@ def run_drift_diagnostic(
     seed_episodes: list,
     device:        torch.device,
     rollout_steps: int = ROLLOUT_STEPS,
-    action_dim:    int = ACTION_DIM,
+
 ) -> np.ndarray:
     """
-    For each seed episode, run an autoregressive rollout for rollout_steps.
-    At each step h, compute MSE between pred_latent[h] and true_latent[h].
+    For each seed episode, run an autoregressive rollout for rollout_steps,
+    replaying the episode's recorded actions for a fair MSE comparison.
 
     Returns
     -------
@@ -171,30 +178,48 @@ def run_drift_diagnostic(
     model.eval()
     with torch.no_grad():
         for s, ep in enumerate(seed_episodes):
-            # Ground-truth latents for this episode: (rollout_steps+1, 384)
+            # Ground-truth latents: (rollout_steps+1, 384)
+
             gt = torch.tensor(
                 ep.latents[: rollout_steps + 1],
                 dtype=torch.float32,
                 device=device,
             )
 
-            # Starting latent z0: shape (1, 1, 384)
-            z_current = gt[0].unsqueeze(0).unsqueeze(0)
+            # Recorded actions: (rollout_steps,) — replay these exactly
+            recorded_actions = torch.tensor(
+                ep.actions[: rollout_steps],
+                dtype=torch.long,
+                device=device,
+            )
+
+            # Starting latent z0 history: shape (1, 1, 384)
+            z_history = gt[0].unsqueeze(0).unsqueeze(0)
+            # Start with an empty action history; we will grow this each step.
+            a_history = None
 
             for h in range(rollout_steps):
-                # Sample a random action for this step — (1, 1)
-                a = torch.randint(0, action_dim, (1, 1), device=device)
+                # Replay recorded action for this step — shape (1, 1)
+                a = recorded_actions[h].unsqueeze(0).unsqueeze(0)
+                if a_history is None:
+                    a_history = a
+                else:
+                    # Concatenate along the sequence dimension (dim=1)
+                    a_history = torch.cat([a_history, a], dim=1)
 
-                # One-step forward pass
-                pred_next, _, _ = model(z_current, a)   # (1, 1, 384)
+                # Forward pass using full latent/action history so far.
+                # Expected output shape: (1, T, 384) where T = h + 1
+                pred_seq, _, _ = model(z_history, a_history)
+                # Use the last timestep prediction as the "next" latent.
+                pred_next = pred_seq[:, -1:, :]   # shape (1, 1, 384)
 
                 # MSE against ground-truth next latent
-                gt_next  = gt[h + 1].unsqueeze(0).unsqueeze(0)   # (1, 1, 384)
-                mse      = torch.mean((pred_next - gt_next) ** 2).item()
+                gt_next = gt[h + 1].unsqueeze(0).unsqueeze(0)   # (1, 1, 384)
+                mse     = torch.mean((pred_next - gt_next) ** 2).item()
                 mse_matrix[s, h] = mse
 
-                # Autoregressive: feed prediction back as next input
-                z_current = pred_next
+                # Autoregressive: append prediction to latent history
+                z_history = torch.cat([z_history, pred_next], dim=1)
 
     return mse_matrix
 
@@ -239,7 +264,9 @@ def plot_drift(
 
     # Mean ± 1 std
     ax.plot(steps, mean_mse, color="steelblue", linewidth=2.5,
-            label="Mean MSE (10 seeds)")
+
+            label=f"Mean MSE ({n_seeds} seeds)")
+
     ax.fill_between(steps, mean_mse - std_mse, mean_mse + std_mse,
                     color="steelblue", alpha=0.15, label="±1 std")
 
@@ -321,10 +348,15 @@ def main():
 
     # 5. Report
     print("\n─── Drift Report " + "─" * 41)
-    print(f"  Step-1  MSE (baseline) : {mean_mse[0]:.6f}")
-    print(f"  Step-10 MSE            : {mean_mse[9]:.6f}")
-    print(f"  Step-25 MSE            : {mean_mse[24]:.6f}")
-    print(f"  Step-50 MSE            : {mean_mse[49]:.6f}")
+    if len(mean_mse) > 0:
+        print(f"  Step-1  MSE (baseline) : {mean_mse[0]:.6f}")
+        
+    # Conditionally report additional steps if they are within the rollout.
+    for step in (10, 25, 50):
+        idx = step - 1  # zero-based index
+        if idx < len(mean_mse):
+            print(f"  Step-{step:<2} MSE            : {mean_mse[idx]:.6f}")
+
 
     if threshold_step is not None:
         print(f"\n  ⚠️  MSE exceeds 2× baseline at step {threshold_step + 1}  "

@@ -206,6 +206,7 @@ class DinoWorldModel(nn.Module):
         # Predict reward and value for each time step in the sequence
         self.reward_head = nn.Linear(config.LATENT_DIM, 1)
         self.value_head = nn.Linear(config.LATENT_DIM, 1)
+        self.done_head   = nn.Linear(config.LATENT_DIM, 1)
         
     # Delta-latent prediction
     
@@ -235,9 +236,10 @@ class DinoWorldModel(nn.Module):
         
         # Reward and value predictions for each time step, useful for training and planning
         pred_rewards = self.reward_head(x)
-        pred_values = self.value_head(x)
+        #pred_values = self.value_head(x)
+        pred_dones = self.done_head(x)
         
-        return pred_next_latents, pred_rewards, pred_values
+        return pred_next_latents, pred_rewards, pred_dones #pred_values
         
     # Rollout (history-aware imagination)
     
@@ -259,7 +261,8 @@ class DinoWorldModel(nn.Module):
         
         preds_latents = []
         preds_rewards = []
-        preds_values = []
+        #preds_values = []
+        preds_dones = []
         
         #
         for t in range(sequence_length):
@@ -271,27 +274,31 @@ class DinoWorldModel(nn.Module):
             a_seq = torch.cat(action_hist, dim=1)
             
             # Predict entire sequence of future latents, rewards and values given history so far
-            pred_latents_seq, pred_rewards_seq, pred_values_seq = self.forward(latent_hist, a_seq)
+            #pred_latents_seq, pred_rewards_seq, pred_values_seq = self.forward(latent_hist, a_seq)
+            
+            pred_latents_seq, pred_rewards_seq, pred_dones_seq = self.forward(latent_hist, a_seq)
             
             # Take last predicted time step
             z_next = pred_latents_seq[:, -1:] # (batch_size, 1, 384)
             r_next = pred_rewards_seq[:, -1:] # (batch_size, 1, 1)
-            v_next = pred_values_seq[:, -1:] # (batch_size, 1, 1)
+            #v_next = pred_values_seq[:, -1:] # (batch_size, 1, 1)
+            d_next = pred_dones_seq[:, -1:] # (batch_size, 1, 1)
             
             # Append predictions
             preds_latents.append(z_next)
             preds_rewards.append(r_next)
-            preds_values.append(v_next)
-            
+            #preds_values.append(v_next)
+            preds_dones.append(d_next)
+
             # Append new latent to history for next step
             latent_hist = torch.cat([latent_hist, z_next], dim=1)
         
         # Concatenate over time
         pred_latents = torch.cat(preds_latents, dim=1) # (batch_size, sequence_length, latent_dim) 
         pred_rewards = torch.cat(preds_rewards, dim=1) # (batch_size, sequence_length, 1)
-        pred_values = torch.cat(preds_values, dim=1) # (batch_size, sequence_length, 1)
-        return pred_latents, pred_rewards, pred_values
-    
+        #pred_values = torch.cat(preds_values, dim=1) # (batch_size, sequence_length, 1)
+        pred_dones = torch.cat(preds_dones, dim=1) # (batch_size, sequence_length, 1)
+        return pred_latents, pred_rewards, pred_dones
     
     """
     When rolling out multiple candidate action sequences, 

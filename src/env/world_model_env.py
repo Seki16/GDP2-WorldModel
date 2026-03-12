@@ -139,7 +139,9 @@ class WorldModelEnv(gym.Env):
         # seed=0 episode is defined as the first episode added to the buffer
         first_episode = self.buffer.episodes[0]           # np.ndarray (T, 384)
         z0 = torch.tensor(
-            first_episode[0],                             # shape (384,)
+
+            first_episode.latents[0],                             # shape (384,)
+
             dtype=torch.float32,
             device=self.device,
         )
@@ -214,8 +216,18 @@ class WorldModelEnv(gym.Env):
         truncated   : bool                 — step limit reached
         info        : dict  {step, done_logit}
         """
-        assert self._z is not None, "Call reset() before step()."
 
+        if self._z is None:
+            raise gym.error.ResetNeeded("Call reset() before step().")
+
+        # ── Validate action ───────────────────────────────────────────────────
+        if not self.action_space.contains(np.int64(action)):
+            raise ValueError(
+                f"Invalid action {action!r}. "
+                f"Expected an integer in [0, {ACTION_DIM - 1}], "
+                f"got {action} (type={type(action).__name__})."
+            )
+        
         # ── Build single-step tensors ─────────────────────────────────────────
         a_in = torch.tensor(
             [[int(action)]], dtype=torch.long, device=self.device,

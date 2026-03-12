@@ -128,10 +128,16 @@ def load_buffer(data_dir: Path) -> "LatentReplayBuffer":
 
 def get_seed_episodes(buffer: "LatentReplayBuffer", n_seeds: int, rollout_steps: int):
     """
-    Return n_seeds episodes that are long enough for a full rollout.
-    Each is a np.ndarray of shape (T, 384) with T >= rollout_steps + 1.
+    Return n_seeds Episode namedtuples that are long enough for a full rollout.
+    Each Episode has fields: .latents (T, 384), .actions (T,), .rewards (T,), .dones (T,).
+    Access latents via ep.latents, actions via ep.actions, etc.
 
     Episodes are spaced evenly across the buffer so seeds are diverse.
+    Requires at least n_seeds episodes with T >= rollout_steps + 1 steps.
+
+    Returns
+    -------
+    list of Episode namedtuples, length n_seeds
     """
     candidates = [ep for ep in buffer.episodes
                   if ep.latents.shape[0] >= rollout_steps + 1]

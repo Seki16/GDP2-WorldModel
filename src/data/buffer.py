@@ -7,12 +7,17 @@ Latent Replay Buffer: stores encoded latent episodes and samples
 random sequences for training the World Model.
 
 Interface Contract (GDP Plan §2.3):
-    buffer.sample(batch_size, seq_len) → (batch_size, seq_len, 384) float32 Tensor
+    buffer.sample(batch_size, seq_len) → Batch namedtuple with fields:
+        .latents  (batch_size, seq_len, 384) float32 Tensor
+        .actions  (batch_size, seq_len)      int64 Tensor
+        .rewards  (batch_size, seq_len)      float32 Tensor
+        .dones    (batch_size, seq_len)      float32 Tensor
 
 Usage:
     buf = LatentReplayBuffer(capacity_steps=200_000)
     buf.add_episode(latents, actions, rewards, dones)
     batch = buf.sample(32, seq_len=16)
+    # → batch.latents (32, 16, 384), batch.actions (32, 16), etc.
     # -> batch.latents (32, 16, 384)
     # -> batch.actions (32, 16, *action_shape)
     # -> batch.rewards (32, 16)
@@ -36,11 +41,7 @@ class LatentReplayBuffer:
         self.capacity_steps = capacity_steps
         self.total_steps    = 0
 
-    def add_episode(self, 
-                    latents: np.ndarray,
-                    actions: np.ndarray,
-                    rewards: np.ndarray,
-                    dones: np.ndarray):
+    def add_episode(self, latents: np.ndarray, actions: np.ndarray = None, rewards: np.ndarray = None, dones: np.ndarray = None):
         """
         Add a full episode of latent vectors to the buffer.
 
@@ -51,23 +52,24 @@ class LatentReplayBuffer:
         :raises ValueError: If arrays have inconsistent leading dimensions.
         """
         T = latents.shape[0]
-        if not (actions.shape[0] == rewards.shape[0] == dones.shape[0] == T):
-            raise ValueError(
-                f"All arrays must have the same leading dimension. "
-                f"Got latents={T}, actions={actions.shape[0]}, "
-                f"rewards={rewards.shape[0]}, dones={dones.shape[0]}."
-            )
+        if actions is not None and rewards is not None and dones is not None:
+            if not (actions.shape[0] == rewards.shape[0] == dones.shape[0] == T):
+                raise ValueError(
+                    f"All arrays must have the same leading dimension. "
+                    f"Got latents={T}, actions={actions.shape[0]}, "
+                    f"rewards={rewards.shape[0]}, dones={dones.shape[0]}."
+                )
         
         self.episodes.append(Episode(
             latents = latents.astype(np.float32),
-            actions = actions.astype(np.int64),
-            rewards = rewards.astype(np.float32).reshape(T),
-            dones = dones.astype(np.float32).reshape(T)
+            actions = actions.astype(np.int64)   if actions is not None else np.zeros(T, dtype=np.int64),
+            rewards = rewards.astype(np.float32) if rewards is not None else np.zeros(T, dtype=np.float32),
+            dones   = dones.astype(np.float32)   if dones   is not None else np.zeros(T, dtype=np.float32),
         ))
         
         self.total_steps += T
 
-        # Evict oldest episodes to stay within capacity
+       # Evict oldest episodes to stay within capacity
         while self.total_steps > self.capacity_steps:
             popped = self.episodes.pop(0)
             self.total_steps -= popped.latents.shape[0]

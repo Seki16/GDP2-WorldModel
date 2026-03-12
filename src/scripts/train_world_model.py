@@ -55,8 +55,15 @@ except ImportError:
 
 class _MockBuffer:
     """Mimics LatentReplayBuffer.sample() when buffer.py is unavailable."""
-    def sample(self, batch_size: int, seq_len: int = 16) -> torch.Tensor:
-        return torch.randn(batch_size, seq_len, 384)
+    def sample(self, batch_size: int, seq_len: int = 16):
+        from collections import namedtuple
+        Batch = namedtuple("Batch", ["latents", "actions", "rewards", "dones"])
+        return Batch(
+            latents=torch.randn(batch_size, seq_len, 384),
+            actions=torch.randint(0, ACTION_DIM, (batch_size, seq_len)).float(),
+            rewards=torch.randn(batch_size, seq_len),
+            dones=torch.zeros(batch_size, seq_len)
+        )
 
 
 class _MockModel(nn.Module):
@@ -82,6 +89,11 @@ SEQ_LEN    = 16
 LATENT_DIM = 384
 ACTION_DIM = 4
 
+# ── Loss weights ──────────────────────────────────────────────────────────────
+
+LAMBDA_LATENT = 1.0
+LAMBDA_REWARD = 0.5
+LAMBDA_DONE   = 0.5
 
 # ── Components factory ────────────────────────────────────────────────────────
 
@@ -116,16 +128,32 @@ def load_buffer_from_disk(buffer: "LatentReplayBuffer", processed_dir: Path) -> 
         print(f"[WARN] No .npz files found in {processed_dir}")
         return 0
 
+    loaded = 0
+    
     for fpath in files:
         data = np.load(fpath)
         if "latents" not in data:
             print(f"[SKIP] {fpath.name} — missing 'latents' key")
             continue
-        buffer.add_episode(data["latents"])   # (T, 384)
+        
+        missing = [k for k in ("actions", "rewards", "dones") if k not in data]
+        if missing:
+            print(f"[SKIP] {fpath.name} — missing keys: {missing}")
+            continue
 
-    print(f"[INFO] Loaded {len(files)} episodes | "
+        buffer.add_episode(
+            latents = data["latents"],   # (T, 384)
+            actions = data["actions"],   # (T, *action_shape)
+            rewards = data["rewards"],   # (T,)
+            dones   = data["dones"]      # (T,)
+        )
+        loaded += 1
+        
+        data.close()  # Free memory immediately after loading each episode
+
+    print(f"[INFO] Loaded {loaded}/{len(files)} episodes | "
           f"Buffer steps: {buffer.total_steps}")
-    return len(files)
+    return loaded
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
@@ -134,35 +162,67 @@ def train_epoch(model, buffer, optimizer, loss_fn, device,
                 batch_size: int, batches_per_epoch: int) -> dict:
     """One full epoch. Returns loss statistics dict."""
     model.train()
+    
     losses = []
+    losses_latent = []
+    losses_reward = []
+    losses_done = []
 
     for _ in range(batches_per_epoch):
-        # A. Sample latents from buffer ─────────────────────────────────────
-        latents = buffer.sample(batch_size, seq_len=SEQ_LEN).to(device)
-        # Integer action ids, shape (B, T)
-        actions = torch.randint(0, ACTION_DIM, (batch_size, SEQ_LEN), device=device)
+        # A. Sample latents from buffer - now unpacks all four fields ─────────────────────────────────────
+        batch = buffer.sample(batch_size, seq_len=SEQ_LEN)
+        latents = batch.latents.to(device)
+        actions = batch.actions.long().to(device)
+        rewards = batch.rewards.to(device)
+        dones = batch.dones.to(device)
 
         # B. Shifted next-step prediction ───────────────────────────────────
         z_in     = latents[:, :-1]     # (B, T-1, 384) — context
         a_in     = actions[:, :-1]     # (B, T-1)
         z_target = latents[:, 1:]      # (B, T-1, 384) — ground truth next latent
-
+        r_target = rewards[:, 1:].unsqueeze(-1) # (B, T-1, 1) — ground truth next reward
+        d_target = dones[:, 1:].unsqueeze(-1)   # (B, T-1, 1) — ground truth next done flag
+        
         # C. Forward + loss ─────────────────────────────────────────────────
         optimizer.zero_grad()
-        pred_next, _pred_rew, _pred_val = model(z_in, a_in)
-        loss = loss_fn(pred_next, z_target)
+        pred_next, pred_rew, pred_done = model(z_in, a_in)
+        
+        
+        # binary_cross_entropy_with_logits not binary_cross_entropy 
+        # — the model's done head outputs raw logits, so the _with_logits 
+        # variant is numerically safer (fuses sigmoid + BCE in one pass). 
+        # The .clamp(0, 1) on d_target is a safety guard in case dones 
+        # arrive as floats slightly outside that range.
+        
+        
+        loss_latent = loss_fn(pred_next, z_target)
+        loss_reward = nn.functional.mse_loss(pred_rew, r_target)
+        loss_done   = nn.functional.binary_cross_entropy_with_logits(
+                          pred_done, d_target.clamp(0, 1)
+                      )
 
+        loss = (LAMBDA_LATENT * loss_latent
+              + LAMBDA_REWARD * loss_reward
+              + LAMBDA_DONE   * loss_done)
+        
         # D. Backward ───────────────────────────────────────────────────────
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         losses.append(loss.item())
+        losses_latent.append(loss_latent.item())
+        losses_reward.append(loss_reward.item())
+        losses_done.append(loss_done.item())
 
+    n = len(losses)
     return {
-        "avg_loss": sum(losses) / len(losses),
-        "min_loss": min(losses),
-        "max_loss": max(losses),
+        "avg_loss":        sum(losses)        / n,
+        "min_loss":        min(losses),
+        "max_loss":        max(losses),
+        "avg_loss_latent": sum(losses_latent) / n,
+        "avg_loss_reward": sum(losses_reward) / n,
+        "avg_loss_done":   sum(losses_done)   / n,
     }
 
 
@@ -248,9 +308,10 @@ def main():
 
         print(
             f"Epoch {epoch:4d}/{args.epochs}  |  "
-            f"avg={stats['avg_loss']:.6f}  "
-            f"min={stats['min_loss']:.6f}  "
-            f"max={stats['max_loss']:.6f}  |  "
+            f"total={stats['avg_loss']:.4f}  "
+            f"latent={stats['avg_loss_latent']:.4f}  "
+            f"rew={stats['avg_loss_reward']:.4f}  "
+            f"done={stats['avg_loss_done']:.4f}  |  "
             f"lr={lr_now:.2e}  |  {elapsed:.1f}s"
         )
 

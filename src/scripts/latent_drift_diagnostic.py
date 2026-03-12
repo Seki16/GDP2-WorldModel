@@ -261,7 +261,7 @@ def plot_drift(
 
     # Mean ± 1 std
     ax.plot(steps, mean_mse, color="steelblue", linewidth=2.5,
-            label="Mean MSE (10 seeds)")
+            label=f"Mean MSE ({n_seeds} seeds)")
     ax.fill_between(steps, mean_mse - std_mse, mean_mse + std_mse,
                     color="steelblue", alpha=0.15, label="±1 std")
 

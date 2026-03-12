@@ -1,0 +1,6 @@
+- model.num_heads=6
+- model.num_layers=8
+- model.mlp_ratio=2
+- training.learning_rate=0.00026923047667636073
+- training.batch_size=64
+- training.sequence_length=24

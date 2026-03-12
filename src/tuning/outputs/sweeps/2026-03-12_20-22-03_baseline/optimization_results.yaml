@@ -1,0 +1,9 @@
+name: optuna
+best_params:
+  model.num_heads: 8
+  model.num_layers: 2
+  model.mlp_ratio: 2
+  training.learning_rate: 0.0008994607652068553
+  training.batch_size: 32
+  training.sequence_length: 24
+best_value: 0.6459239304065705

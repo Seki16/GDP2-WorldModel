@@ -1,0 +1,2 @@
+- training.num_epochs=3
+- training.batches_per_epoch=5

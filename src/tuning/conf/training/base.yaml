@@ -1,0 +1,15 @@
+# src/tuning/conf/training/base.yaml
+# Sweep 2 — structural params fixed at best-found values from sweep 1
+# Only learning_rate is being swept
+
+learning_rate:   0.0003   # placeholder — overridden by Optuna
+batch_size:      32
+sequence_length: 24       # best from sweep 1
+
+num_epochs:        60     # longer budget for fairer LR comparison
+batches_per_epoch: 50
+grad_clip:         1.0
+weight_decay:      0.0
+lambda_latent:     1.0
+lambda_reward:     0.5
+lambda_done:       0.5

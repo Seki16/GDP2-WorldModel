@@ -1,0 +1,46 @@
+# src/tuning/conf/config.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# GDP2 World Model — Hydra Base Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# USAGE:
+#   Single run (baseline defaults):
+#     python -m src.tuning.train_sweep
+#
+#   Focused LR sweep (sweep 2):
+#     python -m src.tuning.train_sweep --multirun
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+defaults:
+  - model: base
+  - training: base
+  - override hydra/sweeper: optuna
+  - _self_
+
+# ── Global ────────────────────────────────────────────────────────────────────
+seed:     42
+device:   cuda
+run_tag:  lr_sweep
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  processed_dir: data/processed
+  buffer_capacity: 200000
+
+# ── Hydra output dirs ─────────────────────────────────────────────────────────
+hydra:
+  run:
+    dir: src/tuning/outputs/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: src/tuning/outputs/sweeps/${now:%Y-%m-%d_%H-%M-%S}_${run_tag}
+    subdir: job_${hydra.job.num}
+  job:
+    chdir: false
+  sweeper:
+    direction: maximize
+    n_trials: 15
+    storage: null
+    study_name: gdp2_wm_lr_sweep
+    params:
+      training.learning_rate: interval(0.00005, 0.0005)

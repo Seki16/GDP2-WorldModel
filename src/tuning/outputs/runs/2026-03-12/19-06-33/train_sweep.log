@@ -1,0 +1,33 @@
+[2026-03-12 19:06:33,119][__main__][INFO] - 
+============================================================
+[2026-03-12 19:06:33,119][__main__][INFO] - TRIAL CONFIG:
+[2026-03-12 19:06:33,120][__main__][INFO] - model:
+  latent_dim: 384
+  action_dim: 4
+  num_heads: 4
+  num_layers: 4
+  mlp_ratio: 4
+training:
+  learning_rate: 0.0001
+  batch_size: 32
+  sequence_length: 16
+  num_epochs: 3
+  batches_per_epoch: 5
+  grad_clip: 1.0
+  weight_decay: 0.0
+  lambda_latent: 1.0
+  lambda_reward: 0.5
+  lambda_done: 0.5
+seed: 42
+device: cpu
+run_tag: baseline
+data:
+  processed_dir: data/processed
+  buffer_capacity: 200000
+
+[2026-03-12 19:06:33,120][__main__][INFO] - ============================================================
+[2026-03-12 19:06:33,169][__main__][INFO] - Model: 7,249,155 params | L=4 H=4 (head_dim=96) MLP×4
+[2026-03-12 19:06:44,524][__main__][INFO] - Buffer loaded: 1000/1000 episodes | total_steps=63,945
+[2026-03-12 19:06:50,682][__main__][INFO] -   epoch   3 | loss=0.1114 | DDA=0.336 | MSE=0.0637 | cos=0.995
+[2026-03-12 19:06:50,958][__main__][INFO] - 
+FINAL: DDA=0.317 | MSE=0.0632 | cos=0.995 | time=2s

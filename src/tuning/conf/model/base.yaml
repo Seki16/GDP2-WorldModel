@@ -1,0 +1,9 @@
+# src/tuning/conf/model/base.yaml
+# Sweep 2 — fixed at best structural params from sweep 1
+
+latent_dim: 384
+action_dim: 4
+
+num_heads:  8    # best from sweep 1 — head_dim = 384/8 = 48
+num_layers: 2    # best from sweep 1
+mlp_ratio:  2    # best from sweep 1

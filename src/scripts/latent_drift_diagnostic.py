@@ -190,23 +190,33 @@ def run_drift_diagnostic(
                 device=device,
             )
 
-            # Starting latent z0: shape (1, 1, 384)
-            z_current = gt[0].unsqueeze(0).unsqueeze(0)
+            # Starting latent z0 history: shape (1, 1, 384)
+            z_history = gt[0].unsqueeze(0).unsqueeze(0)
+            # Start with an empty action history; we will grow this each step.
+            a_history = None
 
             for h in range(rollout_steps):
-                # Replay recorded action — (1, 1)
+                # Replay recorded action for this step — shape (1, 1)
                 a = recorded_actions[h].unsqueeze(0).unsqueeze(0)
+                if a_history is None:
+                    a_history = a
+                else:
+                    # Concatenate along the sequence dimension (dim=1)
+                    a_history = torch.cat([a_history, a], dim=1)
 
-                # One-step forward pass
-                pred_next, _, _ = model(z_current, a)   # (1, 1, 384)
+                # Forward pass using full latent/action history so far.
+                # Expected output shape: (1, T, 384) where T = h + 1
+                pred_seq, _, _ = model(z_history, a_history)
+                # Use the last timestep prediction as the "next" latent.
+                pred_next = pred_seq[:, -1:, :]   # shape (1, 1, 384)
 
                 # MSE against ground-truth next latent
                 gt_next = gt[h + 1].unsqueeze(0).unsqueeze(0)   # (1, 1, 384)
                 mse     = torch.mean((pred_next - gt_next) ** 2).item()
                 mse_matrix[s, h] = mse
 
-                # Autoregressive: feed prediction back as next input
-                z_current = pred_next
+                # Autoregressive: append prediction to latent history
+                z_history = torch.cat([z_history, pred_next], dim=1)
 
     return mse_matrix
 

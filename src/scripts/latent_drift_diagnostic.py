@@ -105,19 +105,19 @@ def load_buffer(data_dir: Path) -> "LatentReplayBuffer":
 
     loaded = 0
     for fpath in files:
-        data    = np.load(fpath)
-        missing = [k for k in ("latents", "actions", "rewards", "dones")
-                   if k not in data]
-        if missing:
-            print(f"[SKIP] {fpath.name} — missing keys: {missing}")
-            continue
-        buf.add_episode(
-            latents = data["latents"],
-            actions = data["actions"],
-            rewards = data["rewards"],
-            dones   = data["dones"],
-        )
-        loaded += 1
+        with np.load(fpath) as data:
+            missing = [k for k in ("latents", "actions", "rewards", "dones")
+                       if k not in data]
+            if missing:
+                print(f"[SKIP] {fpath.name} — missing keys: {missing}")
+                continue
+            buf.add_episode(
+                latents = data["latents"],
+                actions = data["actions"],
+                rewards = data["rewards"],
+                dones   = data["dones"],
+            )
+            loaded += 1
 
     print(f"[INFO] Loaded {loaded}/{len(files)} episodes  "
           f"total_steps={buf.total_steps}")

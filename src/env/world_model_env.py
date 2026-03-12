@@ -139,7 +139,7 @@ class WorldModelEnv(gym.Env):
         # seed=0 episode is defined as the first episode added to the buffer
         first_episode = self.buffer.episodes[0]           # np.ndarray (T, 384)
         z0 = torch.tensor(
-            first_episode[0],                             # shape (384,)
+            first_episode.latents[0],                             # shape (384,)
             dtype=torch.float32,
             device=self.device,
         )

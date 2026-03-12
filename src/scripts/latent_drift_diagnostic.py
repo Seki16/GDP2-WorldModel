@@ -105,6 +105,7 @@ def load_buffer(data_dir: Path) -> "LatentReplayBuffer":
 
     loaded = 0
     for fpath in files:
+
         with np.load(fpath) as data:
             missing = [k for k in ("latents", "actions", "rewards", "dones")
                        if k not in data]
@@ -160,6 +161,7 @@ def run_drift_diagnostic(
     seed_episodes: list,
     device:        torch.device,
     rollout_steps: int = ROLLOUT_STEPS,
+
 ) -> np.ndarray:
     """
     For each seed episode, run an autoregressive rollout for rollout_steps,
@@ -177,6 +179,7 @@ def run_drift_diagnostic(
     with torch.no_grad():
         for s, ep in enumerate(seed_episodes):
             # Ground-truth latents: (rollout_steps+1, 384)
+
             gt = torch.tensor(
                 ep.latents[: rollout_steps + 1],
                 dtype=torch.float32,
@@ -261,7 +264,9 @@ def plot_drift(
 
     # Mean ± 1 std
     ax.plot(steps, mean_mse, color="steelblue", linewidth=2.5,
+
             label=f"Mean MSE ({n_seeds} seeds)")
+
     ax.fill_between(steps, mean_mse - std_mse, mean_mse + std_mse,
                     color="steelblue", alpha=0.15, label="±1 std")
 
@@ -351,6 +356,7 @@ def main():
         idx = step - 1  # zero-based index
         if idx < len(mean_mse):
             print(f"  Step-{step:<2} MSE            : {mean_mse[idx]:.6f}")
+
 
     if threshold_step is not None:
         print(f"\n  ⚠️  MSE exceeds 2× baseline at step {threshold_step + 1}  "

@@ -139,7 +139,9 @@ class WorldModelEnv(gym.Env):
         # seed=0 episode is defined as the first episode added to the buffer
         first_episode = self.buffer.episodes[0]           # np.ndarray (T, 384)
         z0 = torch.tensor(
+
             first_episode.latents[0],                             # shape (384,)
+
             dtype=torch.float32,
             device=self.device,
         )
@@ -214,6 +216,7 @@ class WorldModelEnv(gym.Env):
         truncated   : bool                 — step limit reached
         info        : dict  {step, done_logit}
         """
+
         if self._z is None:
             raise gym.error.ResetNeeded("Call reset() before step().")
 

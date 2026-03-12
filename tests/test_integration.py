@@ -23,12 +23,7 @@ import torch
 import torch.nn as nn
 
 # Notebook-safe project root detection
-_here = os.getcwd()
-while not os.path.isdir(os.path.join(_here, "src")):
-    _parent = os.path.dirname(_here)
-    if _parent == _here:
-        raise RuntimeError("Could not find project root (no 'src/' found)")
-    _here = _parent
+_here = Path(__file__).resolve().parent.parent
 
 if _here not in sys.path:
     sys.path.insert(0, _here)
@@ -36,8 +31,6 @@ if _here not in sys.path:
 print(f"[INFO] Project root: {_here}")
 
 # ── Imports with graceful fallback ────────────────────────────────────────────
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
     from src.data.buffer import LatentReplayBuffer

@@ -1,0 +1,38 @@
+[2026-03-12 20:45:09,351][__main__][INFO] - 
+============================================================
+[2026-03-12 20:45:09,352][__main__][INFO] - TRIAL CONFIG:
+[2026-03-12 20:45:09,353][__main__][INFO] - model:
+  latent_dim: 384
+  action_dim: 4
+  num_heads: 12
+  num_layers: 6
+  mlp_ratio: 4
+training:
+  learning_rate: 1.635509452602038e-05
+  batch_size: 128
+  sequence_length: 32
+  num_epochs: 30
+  batches_per_epoch: 50
+  grad_clip: 1.0
+  weight_decay: 0.0
+  lambda_latent: 1.0
+  lambda_reward: 0.5
+  lambda_done: 0.5
+seed: 42
+device: cuda
+run_tag: baseline
+data:
+  processed_dir: data/processed
+  buffer_capacity: 200000
+
+[2026-03-12 20:45:09,353][__main__][INFO] - ============================================================
+[2026-03-12 20:45:09,416][__main__][INFO] - Model: 10,798,083 params | L=6 H=12 (head_dim=32) MLP×4
+[2026-03-12 20:45:10,161][__main__][INFO] - Buffer loaded: 1000/1000 episodes | total_steps=63,945
+[2026-03-12 20:45:28,777][__main__][INFO] -   epoch   5 | loss=0.0264 | DDA=0.466 | MSE=0.0218 | cos=0.998
+[2026-03-12 20:45:46,825][__main__][INFO] -   epoch  10 | loss=0.0238 | DDA=0.506 | MSE=0.0194 | cos=0.999
+[2026-03-12 20:46:05,092][__main__][INFO] -   epoch  15 | loss=0.0233 | DDA=0.525 | MSE=0.0195 | cos=0.999
+[2026-03-12 20:46:23,220][__main__][INFO] -   epoch  20 | loss=0.0229 | DDA=0.525 | MSE=0.0191 | cos=0.999
+[2026-03-12 20:46:42,093][__main__][INFO] -   epoch  25 | loss=0.0223 | DDA=0.521 | MSE=0.0184 | cos=0.999
+[2026-03-12 20:47:01,241][__main__][INFO] -   epoch  30 | loss=0.0226 | DDA=0.533 | MSE=0.0181 | cos=0.999
+[2026-03-12 20:47:01,519][__main__][INFO] - 
+FINAL: DDA=0.533 | MSE=0.0183 | cos=0.999 | time=111s

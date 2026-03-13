@@ -1,0 +1,44 @@
+[2026-03-12 21:56:22,495][__main__][INFO] - 
+============================================================
+[2026-03-12 21:56:22,495][__main__][INFO] - TRIAL CONFIG:
+[2026-03-12 21:56:22,496][__main__][INFO] - model:
+  latent_dim: 384
+  action_dim: 4
+  num_heads: 8
+  num_layers: 2
+  mlp_ratio: 2
+training:
+  learning_rate: 0.000494748563207109
+  batch_size: 32
+  sequence_length: 24
+  num_epochs: 60
+  batches_per_epoch: 50
+  grad_clip: 1.0
+  weight_decay: 0.0
+  lambda_latent: 1.0
+  lambda_reward: 0.5
+  lambda_done: 0.5
+seed: 42
+device: cuda
+run_tag: lr_sweep
+data:
+  processed_dir: data/processed
+  buffer_capacity: 200000
+
+[2026-03-12 21:56:22,497][__main__][INFO] - ============================================================
+[2026-03-12 21:56:22,511][__main__][INFO] - Model: 2,519,043 params | L=2 H=8 (head_dim=48) MLP×2
+[2026-03-12 21:56:23,145][__main__][INFO] - Buffer loaded: 1000/1000 episodes | total_steps=63,945
+[2026-03-12 21:56:25,744][__main__][INFO] -   epoch   5 | loss=0.0220 | DDA=0.548 | MSE=0.0185 | cos=0.999
+[2026-03-12 21:56:28,701][__main__][INFO] -   epoch  10 | loss=0.0200 | DDA=0.585 | MSE=0.0168 | cos=0.999
+[2026-03-12 21:56:31,423][__main__][INFO] -   epoch  15 | loss=0.0198 | DDA=0.608 | MSE=0.0148 | cos=0.999
+[2026-03-12 21:56:34,186][__main__][INFO] -   epoch  20 | loss=0.0174 | DDA=0.640 | MSE=0.0143 | cos=0.999
+[2026-03-12 21:56:37,185][__main__][INFO] -   epoch  25 | loss=0.0170 | DDA=0.623 | MSE=0.0124 | cos=0.999
+[2026-03-12 21:56:39,841][__main__][INFO] -   epoch  30 | loss=0.0169 | DDA=0.629 | MSE=0.0118 | cos=0.999
+[2026-03-12 21:56:42,591][__main__][INFO] -   epoch  35 | loss=0.0151 | DDA=0.622 | MSE=0.0120 | cos=0.999
+[2026-03-12 21:56:45,254][__main__][INFO] -   epoch  40 | loss=0.0145 | DDA=0.633 | MSE=0.0106 | cos=0.999
+[2026-03-12 21:56:47,896][__main__][INFO] -   epoch  45 | loss=0.0145 | DDA=0.659 | MSE=0.0107 | cos=0.999
+[2026-03-12 21:56:50,548][__main__][INFO] -   epoch  50 | loss=0.0133 | DDA=0.636 | MSE=0.0095 | cos=0.999
+[2026-03-12 21:56:53,190][__main__][INFO] -   epoch  55 | loss=0.0134 | DDA=0.655 | MSE=0.0089 | cos=0.999
+[2026-03-12 21:56:55,774][__main__][INFO] -   epoch  60 | loss=0.0128 | DDA=0.650 | MSE=0.0084 | cos=0.999
+[2026-03-12 21:56:55,851][__main__][INFO] - 
+FINAL: DDA=0.621 | MSE=0.0083 | cos=0.999 | time=33s

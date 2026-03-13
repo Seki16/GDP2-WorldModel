@@ -1,2 +1,9 @@
 numpy>=1.23
 gymnasium>=0.29
+torch>=2.1.0        # Required for DINOv2 and Member B's Model
+torchvision>=0.16.0 # Required for image transforms
+matplotlib          # Required for Member A's plots
+pandas              # Required for Member A's CSV logs
+tqdm                # For progress bars in your training loop
+pillow              # Image processing
+requests            # Required to download DINOv2 from torch.hub

@@ -19,3 +19,15 @@ Thumbs.db
 venv/
 .idea/
 .vscode/
+
+checkpoints/
+logs/
+evaluation/
+__pycache__/
+*.pyc
+*.pth
+*.npz
+
+full_project_context.txt
+print_tree.py
+generate_context.py

@@ -248,8 +248,8 @@ class WorldModelEnv(gym.Env):
 
         # ── Termination conditions ────────────────────────────────────────────
         self._step_count += 1
-        terminated = done_prob > 0.5                    # model says episode over
-        truncated  = self._step_count >= self.max_steps # hard step-limit fallback
+        terminated = False  # done_head unreliable — use reward signal instead
+        truncated  = self._step_count >= self.max_steps
 
         # ── Advance internal state ────────────────────────────────────────────
         self._z = z_next

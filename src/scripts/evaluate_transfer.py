@@ -337,7 +337,18 @@ def main():
         print(f"\n[INFO] Loading Pixel DQN from {dqn_path}")
         ckpt      = torch.load(dqn_path, map_location=device)
         obs_size  = ckpt.get("obs_size", 64)
-        pixel_dqn = TinyCNN(n_actions=4, obs_size=obs_size).to(device)
+        from src.models.dqn import DQNConfig, PixelDQN
+        cfg = ckpt.get("dqn_config", {})
+        dqn_config = DQNConfig(
+                obs_type="pixel",
+                obs_size=obs_size,
+                n_actions=cfg.get("n_actions", 4),
+                hidden_dim=cfg.get("hidden_dim", 128),
+                conv1_channels=cfg.get("conv1_channels", 32),
+                conv2_channels=cfg.get("conv2_channels", 64),
+                conv3_channels=cfg.get("conv3_channels", 64),
+            )
+        pixel_dqn = PixelDQN(dqn_config).to(device)
         pixel_dqn.load_state_dict(ckpt.get("model_state", ckpt))
         pixel_dqn.eval()
 

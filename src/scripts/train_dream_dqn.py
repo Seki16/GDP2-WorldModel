@@ -359,12 +359,16 @@ def train(args: argparse.Namespace) -> None:
             z2_b = z2_b.to(device)
             d_b  = d_b.to(device)
 
+            # 3d — Noise injection: forces robustness to latent distribution shift
+            z_b_noisy  = z_b  + torch.randn_like(z_b)  * args.noise_std
+            z2_b_noisy = z2_b + torch.randn_like(z2_b) * args.noise_std
+
             # Q(z, a) for the taken action
-            q_sa = q(z_b).gather(1, a_b.view(-1, 1)).squeeze(1)
+            q_sa = q(z_b_noisy).gather(1, a_b.view(-1, 1)).squeeze(1)
 
             # Target: r + γ * max_a' Q_tgt(z', a')
             with torch.no_grad():
-                target = r_b + (1.0 - d_b) * args.gamma * q_tgt(z2_b).max(1).values
+                target = r_b + (1.0 - d_b) * args.gamma * q_tgt(z2_b_noisy).max(1).values
 
             loss = nn.functional.smooth_l1_loss(q_sa, target)
 
@@ -469,6 +473,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--save_dir",     type=str,   default="checkpoints")
 
     # Dev mode
+    p.add_argument("--noise_std",    type=float, default=0.01,
+                   help="3d: Gaussian noise std added to latents during learning")
     p.add_argument("--smoke_test",   action="store_true",
                    help="Run 10 dream episodes then exit (no crash = pass)")
 

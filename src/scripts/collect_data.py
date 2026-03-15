@@ -53,33 +53,43 @@ def main():
     parser.add_argument("--max_steps", type=int, default=64)
     parser.add_argument("--wall_prob", type=float, default=0.20)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seeds", type=int, nargs="+", default=None,
+                        help="Multiple maze seeds. Overrides --seed. "
+                             "Episodes are split evenly across seeds.")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cfg = MazeConfig(
-        grid_size=args.grid_size,
-        max_steps=args.max_steps,
-        obs_size=64,
-        wall_prob=args.wall_prob,
-        seed=args.seed,
-    )
-    env = MazeEnv(cfg)
+    seeds = args.seeds if args.seeds is not None else [args.seed]
+    episodes_per_seed = args.episodes // len(seeds)
 
-    for ep in range(args.episodes):
-        obs, actions, rewards, dones = run_episode(env, args.max_steps)
-        np.savez_compressed(
-            out_dir / f"ep_{ep:06d}.npz",
-            obs=obs,
-            actions=actions,
-            rewards=rewards,
-            dones=dones,
+    ep_global = 0
+    for seed in seeds:
+        cfg = MazeConfig(
+            grid_size=args.grid_size,
+            max_steps=args.max_steps,
+            obs_size=64,
+            wall_prob=args.wall_prob,
+            seed=seed,
         )
-        if (ep + 1) % 50 == 0:
-            print(f"[collect_data] saved {ep+1}/{args.episodes} episodes -> {out_dir}")
+        env = MazeEnv(cfg)
 
-    print("[collect_data] DONE")
+        for ep in range(episodes_per_seed):
+            obs, actions, rewards, dones = run_episode(env, args.max_steps)
+            np.savez_compressed(
+                out_dir / f"ep_{ep_global:06d}.npz",
+                obs=obs,
+                actions=actions,
+                rewards=rewards,
+                dones=dones,
+            )
+            ep_global += 1
+            if ep_global % 50 == 0:
+                print(f"[collect_data] saved {ep_global}/{args.episodes} episodes "
+                      f"(seed={seed}) -> {out_dir}")
+
+    print(f"[collect_data] DONE — {ep_global} episodes across seeds {seeds}")
 
 
 if __name__ == "__main__":

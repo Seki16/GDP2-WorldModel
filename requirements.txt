@@ -7,3 +7,4 @@ pandas              # Required for Member A's CSV logs
 tqdm                # For progress bars in your training loop
 pillow              # Image processing
 requests            # Required to download DINOv2 from torch.hub
+imageio             # Create Gif Demo

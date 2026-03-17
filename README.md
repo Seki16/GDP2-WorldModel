@@ -135,7 +135,7 @@ GDP2-WorldModel/
 
 | Member | Role | Core Deliverables |
 |---|---|---|
-| A | Environment & Baseline | `maze_env.py`, `collect_data.py`, `train_baseline.py` |
+| A | Environment & Baseline | `maze_env.py`, `collect_data_dqn.py`, `train_baseline.py` |
 | B | World Model Architect | `transformer.py`, `transformer_configuration.py` |
 | C | Data & Vision Engineer | `encoder.py`, `buffer.py`, `encode_dataset.py` |
 | D | Validation & Theory | `metrics.py`, `visualizer.py`, `evaluate_world_model.py` |

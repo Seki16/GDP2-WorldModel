@@ -61,7 +61,7 @@ These values are **immutable**. Changing any of them breaks everyone else's code
 | Contract | Value |
 |---|---|
 | Latent dimension | `384` — DINOv2 ViT-S/14 output |
-| Sequence length T | `16` steps |
+| Sequence length T | `24` steps |
 | Input image size | `(64, 64, 3)` RGB uint8 |
 | Buffer output shape | `(Batch_Size, 16, 384)` float32 |
 | Action space | `Discrete(4)` — 0:Up 1:Down 2:Left 3:Right |

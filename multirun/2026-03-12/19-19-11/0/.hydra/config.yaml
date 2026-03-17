@@ -1,0 +1,17 @@
+sweep:
+  run_tag: optuna_sweep
+  hydra:
+    mode: MULTIRUN
+    sweeper:
+      _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
+      direction: maximize
+      n_trials: 40
+      storage: sqlite:///src/tuning/outputs/optuna_study.db
+      study_name: gdp2_wm_sweep
+      params:
+        model.num_heads: choice(4, 6, 8, 12)
+        model.num_layers: choice(2, 3, 4, 6, 8)
+        model.mlp_ratio: choice(2, 4, 8)
+        training.learning_rate: interval(0.00001, 0.001)
+        training.batch_size: choice(32, 64, 128)
+        training.sequence_length: choice(16, 24, 32)

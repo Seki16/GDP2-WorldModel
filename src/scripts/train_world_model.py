@@ -14,7 +14,7 @@ python -m src.scripts.train_world_model --epochs 50 --batches_per_epoch 200
 Interface Contract (GDP Plan §2.3)
 ------------------------------------
   Latent dim   : 384   (DINOv2 ViT-S/14)
-  Seq length T : 16
+  Seq length T : 24
   Latent tensor: (B, T, 384)
   Action tensor: (B, T)  — integer class ids [0..3]
 """
@@ -55,7 +55,7 @@ except ImportError:
 
 class _MockBuffer:
     """Mimics LatentReplayBuffer.sample() when buffer.py is unavailable."""
-    def sample(self, batch_size: int, seq_len: int = 16):
+    def sample(self, batch_size: int, seq_len: int = 24):
         from collections import namedtuple
         Batch = namedtuple("Batch", ["latents", "actions", "rewards", "dones"])
         return Batch(
@@ -85,7 +85,7 @@ def _mock_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-SEQ_LEN    = 16
+SEQ_LEN    = 24
 LATENT_DIM = 384
 ACTION_DIM = 4
 

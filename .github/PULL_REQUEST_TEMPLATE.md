@@ -10,9 +10,9 @@
 > These values are IMMUTABLE. If you changed any of these, stop and discuss with Member E first.
 
 - [ ] Latent dimension is still **384** (DINOv2 ViT-S/14)
-- [ ] Sequence length `T` is still **16**
+- [ ] Sequence length `T` is still **24**
 - [ ] Input image size is still **(64, 64, 3) RGB**
-- [ ] Batch tensors are shaped **(Batch_Size, 16, 384)**
+- [ ] Batch tensors are shaped **(Batch_Size, 24, 384)**
 
 ---
 

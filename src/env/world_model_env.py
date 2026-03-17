@@ -72,7 +72,7 @@ class WorldModelEnv(gym.Env):
         buffer=None,
         device: torch.device | str = "cpu",
         max_steps: int = MAX_STEPS,
-        re_anchor_every: int | None = 1,
+        re_anchor_every: int | None = None,
         gap_stats_path: str | None = None,
         shaped_reward_w: float = 0.0,
     ):
@@ -102,6 +102,12 @@ class WorldModelEnv(gym.Env):
         self._z:          torch.Tensor | None = None
         self._step_count: int                 = 0
 
+        # FIX 3a: DISABLED by default (gap_stats_path=None).
+        # Affine correction caused catastrophic explosion — max variance ratio 11.8
+        # amplified near-zero σ_wm dimensions to infinity (avg_ret → -75 trillion).
+        # To enable: pass gap_stats_path="evaluation/latent_gap_stats.npz" to __init__
+        # WARNING: requires evaluation/latent_gap_stats.npz (gitignored, not in repo).
+        # Generate it first by running: python -m src.scripts.latent_distribution_gap
         # ── 3a: Normalisation alignment parameters ────────────────────────────
         self._norm_mu_real:  torch.Tensor | None = None
         self._norm_mu_wm:    torch.Tensor | None = None
@@ -129,9 +135,20 @@ class WorldModelEnv(gym.Env):
                 print(f"[WorldModelEnv] 3a: {gap_stats_path} not found — "
                       f"normalisation alignment disabled")
 
+        # FIX 3b: DISABLED by default (re_anchor_every=None).
+        # Resetting z_t to real buffer latents every N steps caused done_head to fire
+        # at anchor points → fake 96-100% success. At every step, breaks sequential
+        # structure entirely — agent cannot learn navigation when teleported each step.
+        # To enable: pass re_anchor_every=4 or 8 to __init__ (experiment carefully).
         # ── 3b: Cache seed=0 initial latent ──────────────────────────────────
         self._z_init: torch.Tensor = self._fetch_z_init()
 
+
+        # FIX 3c: DISABLED by default (shaped_reward_w=0.0).
+        # L2 distances in 384-dim space (~2.5 typical) buried the +1 goal reward
+        # at any non-trivial weight. weight=0.1 gave avg_ret=-60; weight=0.001
+        # inflated cumulative return above 0.9, making success metric meaningless.
+        # To enable: pass shaped_reward_w=0.001 to __init__ and validate carefully.
         # ── 3c: Goal latent (mean of episodes that reached the goal) ──────────
         self._z_goal: torch.Tensor | None = self._compute_goal_latent()
         if self._z_goal is not None:

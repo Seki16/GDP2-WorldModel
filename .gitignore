@@ -7,6 +7,7 @@
 *.pkl
 *.pt
 *.pth
+*.npz
 
 # --- Python & System Junk ---
 __pycache__/
@@ -20,14 +21,20 @@ venv/
 .idea/
 .vscode/
 
+# --- Project Output (local only) ---
 checkpoints/
 logs/
 evaluation/
-__pycache__/
-*.pyc
-*.pth
-*.npz
+multirun/
 
+# --- Training Artifacts ---
+training_log.json
+mlflow.db
+
+# --- Dev Utilities (local only) ---
 full_project_context.txt
 print_tree.py
 generate_context.py
+
+# --- Test Cache ---
+.pytest_cache/

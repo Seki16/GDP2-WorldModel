@@ -1,33 +1,35 @@
 """
 src/scripts/train_dream_dqn.py  —  Member E: Task 3 (Dreaming Loop)
 ====================================================================
-Trains a DQN agent entirely inside the latent World Model environment.
-The agent NEVER touches the real MazeEnv during training — it learns
-exclusively from imagined transitions produced by the World Model.
+Trains a DQN agent inside the latent World Model environment.
 
-This is the core CDR deliverable: closing the dreaming loop.
+CDR baseline: agent trains exclusively on dream transitions (pure WM rollouts).
+E.1 Dyna hybrid: each learning batch is a mix of:
+    - Real transitions sampled directly from the LatentReplayBuffer (real latents)
+    - Short WM rollouts of at most --dyna_max_rollout_steps steps, starting from
+      a real latent anchor sampled from the buffer.
+
+Set --dyna_real_ratio 0.0 to reproduce the CDR baseline exactly (no real transitions,
+unlimited rollout length — pure dream training as before).
 
 Architecture
 ------------
   WorldModelEnv  →  obs: np.ndarray (384,)  —  latent vector z_t
   DreamQNet      →  MLP: 384 → 256 → 128 → 4  —  Q(z, a) for a ∈ {0,1,2,3}
 
-The trained policy weights are saved to:
-  checkpoints/dqn_dream.pt
-
-These weights are then loaded by the transfer experiment (Task 4) to
-execute the dream-trained policy in the real MazeEnv.
-
 Usage
 -----
-  # Smoke test (10 episodes, no crash check):
+  # Smoke test:
   python -m src.scripts.train_dream_dqn --smoke_test
 
-  # Full training run:
-  python -m src.scripts.train_dream_dqn --steps 200000
+  # CDR baseline reproduction (Dyna disabled):
+  python -m src.scripts.train_dream_dqn --steps 200000 --dyna_real_ratio 0.0
 
-  # With a specific world model checkpoint:
-  python -m src.scripts.train_dream_dqn --wm_checkpoint checkpoints/world_model_best.pt
+  # Dyna hybrid run (E.1):
+  python -m src.scripts.train_dream_dqn --steps 200000 --dyna_real_ratio 0.3 --dyna_max_rollout_steps 5
+
+  # Dyna hybrid with KL-trained WM (recommended E.1 run):
+  python -m src.scripts.train_dream_dqn --steps 200000 --wm_checkpoint checkpoints/kl_run/world_model_best.pt --dyna_real_ratio 0.3 --dyna_max_rollout_steps 5 --save_dir checkpoints/dyna_run
 
 Interface Contract (GDP Plan §2.3)
 ------------------------------------
@@ -50,10 +52,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# ── WorldModelEnv (already written — Member B + E) ────────────────────────────
+# ── WorldModelEnv ─────────────────────────────────────────────────────────────
 from src.env.world_model_env import WorldModelEnv
 
-# ── Real World Model imports (graceful fallback if not yet available) ─────────
+# ── Real World Model imports ──────────────────────────────────────────────────
 try:
     from src.models.transformer import DinoWorldModel
     from src.models.transformer_configuration import TransformerWMConfiguration as Config
@@ -62,7 +64,7 @@ except ImportError:
     _REAL_MODEL = False
     print("[WARN] src.models.transformer not found — WorldModelEnv will use random stub")
 
-# ── Real Buffer (needed to seed the env's initial latent z_0) ────────────────
+# ── Real Buffer ───────────────────────────────────────────────────────────────
 try:
     from src.data.buffer import LatentReplayBuffer
     _REAL_BUFFER = True
@@ -78,6 +80,14 @@ except ImportError:
 LATENT_DIM = 384
 ACTION_DIM = 4
 
+# DYNA HYBRID (E.1): defaults
+# dyna_real_ratio        — fraction of each training batch drawn from the real
+#                          buffer. 0.3 means 30% real, 70% dream.
+# dyna_max_rollout_steps — WM rollouts are capped at this many steps before
+#                          re-anchoring to a new real latent. Keeps drift small.
+DYNA_REAL_RATIO_DEFAULT        = 0.3
+DYNA_MAX_ROLLOUT_STEPS_DEFAULT = 5
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Q-Network: MLP over latent space
@@ -89,11 +99,6 @@ class DreamQNet(nn.Module):
 
     Input  : z ∈ R^384  (latent observation from WorldModelEnv)
     Output : Q(z, a) for each of the 4 discrete actions
-
-    Why MLP (not CNN)?
-      The obs is already a 384-dim semantic latent vector from DINOv2.
-      Spatial convolutions are irrelevant — the latent is not an image.
-      An MLP is faster, simpler, and well-matched to the input structure.
     """
     def __init__(
         self,
@@ -112,20 +117,11 @@ class DreamQNet(nn.Module):
         )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        Parameters
-        ----------
-        z : (B, 384) float tensor
-
-        Returns
-        -------
-        q : (B, 4) float tensor  —  Q-values for each action
-        """
         return self.net(z)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Replay Buffer (simple, self-contained — independent of LatentReplayBuffer)
+# Replay Buffer
 # ─────────────────────────────────────────────────────────────────────────────
 
 Transition = collections.namedtuple(
@@ -135,8 +131,9 @@ Transition = collections.namedtuple(
 
 class DreamReplayBuffer:
     """
-    Simple circular replay buffer for (z, a, r, z', done) dream transitions.
-    Separate from LatentReplayBuffer (which stores world model training data).
+    Circular replay buffer for (z, a, r, z', done) transitions.
+    Stores both dream transitions (from WM rollouts) and real transitions
+    (from the LatentReplayBuffer, added during Dyna hybrid batch construction).
     """
     def __init__(self, capacity: int = 100_000):
         self._buf: list[Transition] = []
@@ -164,7 +161,7 @@ class DreamReplayBuffer:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Epsilon schedule  (mirrors train_baseline.py)
+# Epsilon schedule
 # ─────────────────────────────────────────────────────────────────────────────
 
 def epsilon_schedule(step: int, eps_start: float, eps_end: float, eps_decay: int) -> float:
@@ -179,14 +176,6 @@ def epsilon_schedule(step: int, eps_start: float, eps_end: float, eps_decay: int
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_world_model(checkpoint_path: str | None, device: torch.device):
-    """
-    Load DinoWorldModel from checkpoint, or return None to use the random stub.
-
-    Returns
-    -------
-    model : DinoWorldModel | None
-        None → WorldModelEnv will fall back to _RandomWorldModel (smoke-test mode)
-    """
     if checkpoint_path is None or not _REAL_MODEL:
         print("[WARN] No world model checkpoint — WorldModelEnv will use random stub")
         return None
@@ -200,8 +189,8 @@ def load_world_model(checkpoint_path: str | None, device: torch.device):
     model  = DinoWorldModel(config).to(device)
     ckpt   = torch.load(path, map_location=device)
     missing, unexpected = model.load_state_dict(ckpt["model_state"], strict=False)
-    if missing:   print(f"[WARN] Missing keys (random-init): {missing}")
-    if unexpected: print(f"[WARN] Unexpected keys (ignored): {unexpected}")
+    if missing:    print(f"[WARN] Missing keys (random-init): {missing}")
+    if unexpected: print(f"[WARN] Unexpected keys (ignored):  {unexpected}")
     model.eval()
     print(f"[INFO] Loaded world model from {path}  "
           f"(epoch={ckpt.get('epoch', '?')}, "
@@ -210,13 +199,14 @@ def load_world_model(checkpoint_path: str | None, device: torch.device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Buffer loader (for WorldModelEnv initial latent z_0)
+# Buffer loader
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_latent_buffer(data_dir: str | None):
     """
-    Load LatentReplayBuffer from processed latent files, or return None.
-    Used by WorldModelEnv to seed the initial state z_0.
+    Load LatentReplayBuffer from processed latent files.
+    Used both by WorldModelEnv (z_0 seeding) and by the Dyna hybrid
+    (real transition sampling).
     """
     if data_dir is None or not _REAL_BUFFER:
         print("[WARN] No data_dir / buffer — WorldModelEnv will use random z_0")
@@ -246,26 +236,190 @@ def load_latent_buffer(data_dir: str | None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DYNA HYBRID (E.1): Real transition sampler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def sample_real_transitions(
+    buf,
+    n: int,
+    device: torch.device,
+) -> list[Transition]:
+    """
+    Sample n individual (z, a, r, z', done) transitions directly from the
+    LatentReplayBuffer. These are real DINOv2-encoded latents — guaranteed
+    to be in-distribution. Used to fill the real portion of Dyna batches.
+
+    Each transition is drawn by:
+      1. Picking a random episode.
+      2. Picking a random step t within that episode (not the last step,
+         so z' = latents[t+1] is always available).
+
+    Parameters
+    ----------
+    buf    : LatentReplayBuffer
+    n      : number of transitions to sample
+    device : torch.device (unused here — tensors are built later in the
+             learning step, kept as numpy for consistency with DreamReplayBuffer)
+
+    Returns
+    -------
+    list of n Transition namedtuples with numpy arrays for z and z2
+    """
+    transitions = []
+    episodes = buf.episodes
+
+    for _ in range(n):
+        # Pick a random episode that has at least 2 steps (need z and z')
+        ep = episodes[np.random.randint(len(episodes))]
+        T  = ep.latents.shape[0]
+
+        if T < 2:
+            # Edge case: single-step episode — use step 0 with z'=z (no motion)
+            t = 0
+            z  = ep.latents[0].astype(np.float32)
+            z2 = ep.latents[0].astype(np.float32)
+        else:
+            t  = np.random.randint(0, T - 1)    # t in [0, T-2] so t+1 is valid
+            z  = ep.latents[t].astype(np.float32)
+            z2 = ep.latents[t + 1].astype(np.float32)
+
+        a    = int(ep.actions[t])
+        r    = float(ep.rewards[t])
+        done = float(ep.dones[t])
+
+        transitions.append(Transition(z=z, a=a, r=r, z2=z2, done=done))
+
+    return transitions
+
+
+def sample_dyna_rollout(
+    wm_model,
+    buf,
+    q_net:         DreamQNet,
+    device:        torch.device,
+    max_steps:     int,
+    eps:           float,
+    noise_std:     float,
+) -> list[Transition]:
+    """
+    Generate one short WM rollout of at most max_steps steps, starting from
+    a real latent anchor sampled from the buffer.
+
+    The rollout uses the current DQN policy (epsilon-greedy) to select actions,
+    exactly as the main dreaming loop does. This means the Dyna rollouts explore
+    the same latent regions the DQN is currently valuing.
+
+    After max_steps steps the rollout stops — z_final is discarded and never
+    fed back into the WM. This caps drift accumulation to at most max_steps
+    compounding errors, as opposed to 64 in the original dreaming loop.
+
+    Parameters
+    ----------
+    wm_model   : DinoWorldModel (eval mode, no grad)
+    buf        : LatentReplayBuffer — provides the real anchor z_0
+    q_net      : DreamQNet — used for action selection (epsilon-greedy)
+    device     : torch.device
+    max_steps  : int — hard cap on rollout length (default 5)
+    eps        : float — current epsilon for action selection
+    noise_std  : float — noise std for robustness (applied to z when selecting
+                 action, NOT to the z stored in the transition — we want the
+                 stored latents to be as clean as possible)
+
+    Returns
+    -------
+    list of Transition namedtuples (at most max_steps items)
+    """
+    transitions = []
+    episodes = buf.episodes
+
+    # ── Sample a real anchor latent z_0 ──────────────────────────────────────
+    ep  = episodes[np.random.randint(len(episodes))]
+    idx = np.random.randint(ep.latents.shape[0])
+    z_anchor = ep.latents[idx].astype(np.float32)      # (384,) numpy
+
+    # Convert to WM input format: (1, 1, 384) tensor
+    z_t = torch.tensor(z_anchor, dtype=torch.float32, device=device)
+    z_t = z_t.unsqueeze(0).unsqueeze(0)                # (1, 1, 384)
+
+    for _ in range(max_steps):
+        # ── Epsilon-greedy action (same logic as main loop) ───────────────────
+        z_obs = z_t.squeeze().cpu().numpy()            # (384,) for DQN input
+        if random.random() < eps:
+            action = random.randint(0, ACTION_DIM - 1)
+        else:
+            z_input = torch.tensor(z_obs, dtype=torch.float32, device=device)
+            z_noisy = z_input + torch.randn_like(z_input) * noise_std
+            with torch.no_grad():
+                action = int(torch.argmax(q_net(z_noisy.unsqueeze(0)), dim=1).item())
+
+        # ── WM forward step ───────────────────────────────────────────────────
+        a_tensor = torch.tensor([[action]], dtype=torch.long, device=device)
+        with torch.no_grad():
+            pred_next, pred_rew, pred_done = wm_model(z_t, a_tensor)
+
+        # Extract outputs — match WorldModelEnv.step() exactly
+        z_next     = pred_next[:, -1:, :]              # (1, 1, 384)
+        wm_reward  = float(pred_rew[:, -1, 0].item())
+        # done_head disabled (same as CDR final run) — truncation handled
+        # externally by rollout length cap
+        terminated = False
+        done       = float(terminated)
+
+        z_next_obs = z_next.squeeze().cpu().numpy()    # (384,) numpy
+
+        transitions.append(Transition(
+            z    = z_obs,
+            a    = action,
+            r    = wm_reward,
+            z2   = z_next_obs,
+            done = done,
+        ))
+
+        # Advance state
+        z_t = z_next
+
+        if terminated:
+            break
+
+    return transitions
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main training loop
 # ─────────────────────────────────────────────────────────────────────────────
 
 def train(args: argparse.Namespace) -> None:
 
-    # ── Device ────────────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Device: {device}")
 
-    # ── World model + env ─────────────────────────────────────────────────────
+    # ── World model + buffer + env ────────────────────────────────────────────
     wm_model = load_world_model(args.wm_checkpoint, device)
     buf      = load_latent_buffer(args.data_dir)
 
     env = WorldModelEnv(
-        model    = wm_model,
-        buffer   = buf,
-        device   = device,
-        max_steps= 64,
+        model     = wm_model,
+        buffer    = buf,
+        device    = device,
+        max_steps = 64,
     )
     print(f"[INFO] WorldModelEnv ready: {env}")
+
+    # DYNA HYBRID (E.1): check if Dyna is enabled and buffer is available
+    dyna_enabled = (
+        args.dyna_real_ratio > 0.0
+        and buf is not None
+        and len(buf.episodes) > 0
+        and wm_model is not None
+    )
+    if args.dyna_real_ratio > 0.0 and not dyna_enabled:
+        print("[WARN] Dyna hybrid requested but buffer or WM not available — "
+              "falling back to pure dream training")
+
+    print(f"[INFO] Dyna hybrid        : {'ENABLED' if dyna_enabled else 'DISABLED (CDR baseline)'}")
+    if dyna_enabled:
+        print(f"[INFO]   real_ratio        : {args.dyna_real_ratio}")
+        print(f"[INFO]   max_rollout_steps : {args.dyna_max_rollout_steps}")
 
     # ── DQN components ────────────────────────────────────────────────────────
     q     = DreamQNet().to(device)
@@ -312,7 +466,7 @@ def train(args: argparse.Namespace) -> None:
         obs_next, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
 
-        # ── Store transition ──────────────────────────────────────────────────
+        # ── Store dream transition in replay buffer ────────────────────────────
         replay_buf.push(Transition(
             z    = obs,
             a    = action,
@@ -331,10 +485,7 @@ def train(args: argparse.Namespace) -> None:
             if len(recent_returns) > 100:
                 recent_returns.pop(0)
 
-            # True success = world model predicted done BEFORE the step limit
-            # If terminated fires exactly at max_steps, it's the done_head
-            # misfiring at truncation, not a genuine goal-reach
-            success = episode_return > 0.5  # real goal gives +1.0 reward
+            success = episode_return > 0.5
             if success:
                 success_count += 1
 
@@ -352,21 +503,72 @@ def train(args: argparse.Namespace) -> None:
                 and t % args.train_every == 0
                 and len(replay_buf) >= args.batch_size):
 
-            z_b, a_b, r_b, z2_b, d_b = replay_buf.sample(args.batch_size)
-            z_b  = z_b.to(device)
-            a_b  = a_b.to(device)
-            r_b  = r_b.to(device)
-            z2_b = z2_b.to(device)
-            d_b  = d_b.to(device)
+            # DYNA HYBRID (E.1): ───────────────────────────────────────────────
+            # Build a mixed batch: some transitions from the real buffer (real
+            # DINOv2 latents, guaranteed in-distribution), the rest from short
+            # WM rollouts (capped at dyna_max_rollout_steps to limit drift).
+            #
+            # When dyna_enabled=False this entire block is skipped and we fall
+            # through to the standard replay_buf.sample() — exact CDR baseline.
+            if dyna_enabled:
+                n_real  = max(1, int(args.batch_size * args.dyna_real_ratio))
+                n_dream = args.batch_size - n_real
 
-            # 3d — Noise injection: forces robustness to latent distribution shift
+                # Real portion: individual transitions from LatentReplayBuffer
+                real_transitions = sample_real_transitions(buf, n_real, device)
+
+                # Dream portion: short WM rollouts from real anchors.
+                # We generate rollouts until we have enough transitions.
+                dream_transitions = []
+                while len(dream_transitions) < n_dream:
+                    rollout = sample_dyna_rollout(
+                        wm_model   = wm_model,
+                        buf        = buf,
+                        q_net      = q,
+                        device     = device,
+                        max_steps  = args.dyna_max_rollout_steps,
+                        eps        = eps,
+                        noise_std  = args.noise_std,
+                    )
+                    dream_transitions.extend(rollout)
+
+                # Trim dream to exactly n_dream (rollouts may overshoot slightly)
+                dream_transitions = dream_transitions[:n_dream]
+
+                # Combine and convert to tensors
+                all_transitions = real_transitions + dream_transitions
+                z_b  = torch.tensor(
+                    np.array([t.z    for t in all_transitions]),
+                    dtype=torch.float32, device=device)
+                a_b  = torch.tensor(
+                    [t.a             for t in all_transitions],
+                    dtype=torch.long, device=device)
+                r_b  = torch.tensor(
+                    [t.r             for t in all_transitions],
+                    dtype=torch.float32, device=device)
+                z2_b = torch.tensor(
+                    np.array([t.z2   for t in all_transitions]),
+                    dtype=torch.float32, device=device)
+                d_b  = torch.tensor(
+                    [t.done          for t in all_transitions],
+                    dtype=torch.float32, device=device)
+
+            else:
+                # CDR baseline: pure dream replay sample (unchanged)
+                z_b, a_b, r_b, z2_b, d_b = replay_buf.sample(args.batch_size)
+                z_b  = z_b.to(device)
+                a_b  = a_b.to(device)
+                r_b  = r_b.to(device)
+                z2_b = z2_b.to(device)
+                d_b  = d_b.to(device)
+
+            # ── Noise injection (fix 3d — unchanged) ──────────────────────────
             z_b_noisy  = z_b  + torch.randn_like(z_b)  * args.noise_std
             z2_b_noisy = z2_b + torch.randn_like(z2_b) * args.noise_std
 
-            # Q(z, a) for the taken action
+            # ── Q-learning update (unchanged) ─────────────────────────────────
             q_sa = q(z_b_noisy).gather(1, a_b.view(-1, 1)).squeeze(1)
 
-            # Target: r + γ * max_a' Q_tgt(z', a')
             with torch.no_grad():
                 target = r_b + (1.0 - d_b) * args.gamma * q_tgt(z2_b_noisy).max(1).values
 
@@ -405,27 +607,29 @@ def train(args: argparse.Namespace) -> None:
             break
 
     # ── Save weights ──────────────────────────────────────────────────────────
-    final_sr = 100.0 * success_count / max(1, episode_idx)
+    final_sr  = 100.0 * success_count / max(1, episode_idx)
     ckpt_path = save_dir / "dqn_dream.pt"
     torch.save({
-        "model_state":       q.state_dict(),
-        "latent_dim":        LATENT_DIM,
-        "action_dim":        ACTION_DIM,
-        "wm_checkpoint":     args.wm_checkpoint,
-        "steps_trained":     args.steps,
-        "final_success_pct": final_sr,
-        "args":              vars(args),
+        "model_state":             q.state_dict(),
+        "latent_dim":              LATENT_DIM,
+        "action_dim":              ACTION_DIM,
+        "wm_checkpoint":           args.wm_checkpoint,
+        "steps_trained":           args.steps,
+        "final_success_pct":       final_sr,
+        # DYNA HYBRID (E.1): record Dyna config in checkpoint for traceability
+        "dyna_real_ratio":         args.dyna_real_ratio,
+        "dyna_max_rollout_steps":  args.dyna_max_rollout_steps,
+        "args":                    vars(args),
     }, ckpt_path)
 
-    # ── Save metrics JSON (for CDR plots) ──────────────────────────────────────
     metrics_path = save_dir / "dream_dqn_training_log.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics_log, f, indent=2)
 
     print(f"\n[Dream DQN] DONE")
-    print(f"[Dream DQN] Weights     → {ckpt_path}")
-    print(f"[Dream DQN] Metrics CSV → {out_path}")
-    print(f"[Dream DQN] Metrics JSON→ {metrics_path}")
+    print(f"[Dream DQN] Weights      → {ckpt_path}")
+    print(f"[Dream DQN] Metrics CSV  → {out_path}")
+    print(f"[Dream DQN] Metrics JSON → {metrics_path}")
     print(f"[Dream DQN] Episodes: {episode_idx}  |  Success rate: {final_sr:.1f}%")
     if recent_returns:
         print(f"[Dream DQN] Avg return (last 100 ep): {np.mean(recent_returns):+.4f}")
@@ -442,41 +646,46 @@ def parse_args() -> argparse.Namespace:
 
     # World model
     p.add_argument("--wm_checkpoint", type=str,
-                   default="checkpoints/world_model_best.pt",
-                   help="Path to trained world model checkpoint")
+                   default="checkpoints/world_model_best.pt")
     p.add_argument("--data_dir", type=str,
-                   default="data/processed",
-                   help="Directory of processed latent .npz files (for z_0 seeding)")
+                   default="data/processed")
 
     # Training
-    p.add_argument("--steps",        type=int,   default=200_000)
-    p.add_argument("--lr",           type=float, default=1e-4,
-                   help="Adam learning rate (lower than baseline: latent space is smoother)")
-    p.add_argument("--gamma",        type=float, default=0.99)
-    p.add_argument("--batch_size",   type=int,   default=64)
-    p.add_argument("--buffer_size",  type=int,   default=100_000,
-                   help="Replay buffer capacity (larger than baseline: no env resets)")
-    p.add_argument("--learn_starts", type=int,   default=1_000,
-                   help="Steps before learning begins (fill buffer first)")
-    p.add_argument("--train_every",  type=int,   default=1,
-                   help="Gradient update every N steps")
-    p.add_argument("--target_update",type=int,   default=1_000,
-                   help="Hard target network sync every N steps")
+    p.add_argument("--steps",         type=int,   default=200_000)
+    p.add_argument("--lr",            type=float, default=1e-4)
+    p.add_argument("--gamma",         type=float, default=0.99)
+    p.add_argument("--batch_size",    type=int,   default=64)
+    p.add_argument("--buffer_size",   type=int,   default=100_000)
+    p.add_argument("--learn_starts",  type=int,   default=1_000)
+    p.add_argument("--train_every",   type=int,   default=1)
+    p.add_argument("--target_update", type=int,   default=1_000)
 
     # Epsilon schedule
-    p.add_argument("--eps_start",    type=float, default=1.0)
-    p.add_argument("--eps_end",      type=float, default=0.05)
-    p.add_argument("--eps_decay",    type=int,   default=100_000)
+    p.add_argument("--eps_start",     type=float, default=1.0)
+    p.add_argument("--eps_end",       type=float, default=0.05)
+    p.add_argument("--eps_decay",     type=int,   default=100_000)
 
     # Logging / output
-    p.add_argument("--log_every",    type=int,   default=5_000)
-    p.add_argument("--save_dir",     type=str,   default="checkpoints")
+    p.add_argument("--log_every",     type=int,   default=5_000)
+    p.add_argument("--save_dir",      type=str,   default="checkpoints")
+
+    # Fix 3d
+    p.add_argument("--noise_std",     type=float, default=0.01)
+
+    # DYNA HYBRID (E.1): ───────────────────────────────────────────────────────
+    # dyna_real_ratio        — fraction of each training batch drawn from the
+    #                          real LatentReplayBuffer. 0.0 = CDR baseline.
+    # dyna_max_rollout_steps — WM rollout length cap. Keeps drift bounded.
+    #                          Ignored when dyna_real_ratio=0.0.
+    p.add_argument("--dyna_real_ratio",
+                   type=float, default=DYNA_REAL_RATIO_DEFAULT,
+                   help="Fraction of batch from real buffer. 0.0 = CDR baseline.")
+    p.add_argument("--dyna_max_rollout_steps",
+                   type=int,   default=DYNA_MAX_ROLLOUT_STEPS_DEFAULT,
+                   help="Max WM rollout steps per Dyna rollout. Default 5.")
 
     # Dev mode
-    p.add_argument("--noise_std",    type=float, default=0.01,
-                   help="3d: Gaussian noise std added to latents during learning")
-    p.add_argument("--smoke_test",   action="store_true",
-                   help="Run 10 dream episodes then exit (no crash = pass)")
+    p.add_argument("--smoke_test",    action="store_true")
 
     return p.parse_args()
 

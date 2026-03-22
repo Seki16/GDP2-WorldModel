@@ -11,6 +11,12 @@ python -m src.scripts.train_world_model --smoke_test
 # E.4 full training run
 python -m src.scripts.train_world_model --epochs 50 --batches_per_epoch 200
 
+# KL regularisation run (this sprint — E.1)
+python -m src.scripts.train_world_model --epochs 50 --batches_per_epoch 200 --kl_weight 0.01
+
+# CDR baseline reproduction (KL disabled)
+python -m src.scripts.train_world_model --epochs 50 --batches_per_epoch 200 --kl_weight 0.0
+
 Interface Contract (GDP Plan §2.3)
 ------------------------------------
   Latent dim   : 384   (DINOv2 ViT-S/14)
@@ -31,10 +37,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# ── Real imports (Members B & C deliverables) ─────────────────────────────────
-# Graceful fallback stubs let E.3 smoke-test pass even if partners are still
-# finalising their modules.
+# ── KL REGULARISATION (E.1) ───────────────────────────────────────────────────
+# Added for the final sprint KL reg fix.
+# torch.distributions provides analytically exact KL(Normal || Normal).
+from torch.distributions import Normal, kl_divergence
 
+# ── Real imports (Members B & C deliverables) ─────────────────────────────────
 try:
     from src.data.buffer import LatentReplayBuffer
     _REAL_BUFFER = True
@@ -65,6 +73,10 @@ class _MockBuffer:
             dones=torch.zeros(batch_size, seq_len)
         )
 
+    # KL REGULARISATION (E.1): mock also needs episodes attribute so that
+    # compute_prior_gaussian() doesn't crash in --mock mode.
+    episodes = []
+
 
 class _MockModel(nn.Module):
     """Minimal stand-in for DinoWorldModel."""
@@ -73,7 +85,7 @@ class _MockModel(nn.Module):
         self.proj = nn.Linear(384, 384)
 
     def forward(self, z_in: torch.Tensor, a_in: torch.Tensor):
-        pred_next = z_in + self.proj(z_in)           # residual prediction
+        pred_next = z_in + self.proj(z_in)
         pred_rew  = torch.zeros(*z_in.shape[:2], 1, device=z_in.device)
         pred_val  = torch.zeros(*z_in.shape[:2], 1, device=z_in.device)
         return pred_next, pred_rew, pred_val
@@ -94,6 +106,125 @@ ACTION_DIM = 4
 LAMBDA_LATENT = 1.0
 LAMBDA_REWARD = 0.5
 LAMBDA_DONE   = 0.5
+
+# KL REGULARISATION (E.1):
+# Default kl_weight (β). Kept small so KL term does not overwhelm the
+# reconstruction loss. Overridden at runtime by --kl_weight CLI arg.
+# Set to 0.0 to reproduce the CDR baseline exactly.
+KL_WEIGHT_DEFAULT = 0.01
+
+
+# ── KL REGULARISATION (E.1): Prior fitting ────────────────────────────────────
+
+def compute_prior_gaussian(
+    buffer,
+    device: torch.device,
+    max_episodes: int = 500,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Fit a diagonal Gaussian prior p = Normal(mu, sigma) to the real buffer
+    latents. This prior is used as the KL regularisation target during WM
+    training — the WM's predicted latent distribution is pulled toward this
+    prior, preventing autoregressive drift into out-of-distribution regions.
+
+    Parameters
+    ----------
+    buffer       : LatentReplayBuffer (or _MockBuffer)
+    device       : torch.device
+    max_episodes : int — cap to avoid OOM on large buffers
+
+    Returns
+    -------
+    mu_prior    : (384,) float32 tensor  — per-dimension mean
+    std_prior   : (384,) float32 tensor  — per-dimension std (clamped ≥ 1e-4)
+
+    Why diagonal Gaussian?
+        A full covariance matrix over 384 dims would be 384×384 = 147k params
+        just for the prior. Diagonal is the standard approximation used in
+        DreamerV3 and most VAE-style world models. It assumes each latent
+        dimension is independent, which is a reasonable approximation for
+        DINOv2 CLS tokens.
+    """
+    episodes = getattr(buffer, "episodes", [])
+
+    if not episodes:
+        # No real data available (mock mode or empty buffer).
+        # Fall back to standard Normal(0, 1) — a reasonable uninformed prior.
+        print("[KL prior] No episodes found — using standard Normal(0,1) prior")
+        mu_prior  = torch.zeros(LATENT_DIM, device=device)
+        std_prior = torch.ones(LATENT_DIM,  device=device)
+        return mu_prior, std_prior
+
+    # Collect latents from up to max_episodes episodes
+    all_latents = []
+    for ep in episodes[:max_episodes]:
+        # ep.latents is a numpy array of shape (T, 384)
+        all_latents.append(
+            torch.tensor(ep.latents, dtype=torch.float32)
+        )
+
+    # Stack into (N_total_steps, 384)
+    all_latents = torch.cat(all_latents, dim=0).to(device)
+
+    mu_prior  = all_latents.mean(dim=0)                         # (384,)
+    std_prior = all_latents.std(dim=0).clamp(min=1e-4)          # (384,) ≥ 1e-4
+
+    print(f"[KL prior] Fitted from {all_latents.shape[0]:,} real latent steps  |  "
+          f"mu mean={mu_prior.mean().item():.4f}  "
+          f"std mean={std_prior.mean().item():.4f}")
+
+    return mu_prior, std_prior
+
+
+def kl_loss_fn(
+    pred_next:  torch.Tensor,
+    mu_prior:   torch.Tensor,
+    std_prior:  torch.Tensor,
+) -> torch.Tensor:
+    """
+    Compute mean KL divergence between the WM's predicted latent distribution
+    and the real-data prior:
+
+        KL( Normal(mu_q, sigma_q) || Normal(mu_prior, sigma_prior) )
+
+    where mu_q and sigma_q are the empirical mean and std of pred_next across
+    the batch dimension (treating each step as an independent sample).
+
+    Parameters
+    ----------
+    pred_next  : (B, T-1, 384) — WM predicted next latents
+    mu_prior   : (384,)        — prior mean fitted from real buffer
+    std_prior  : (384,)        — prior std fitted from real buffer
+
+    Returns
+    -------
+    kl_loss : scalar tensor
+
+    Why this formulation?
+        We treat the batch of WM predictions as samples from the WM's implicit
+        output distribution q. We fit a diagonal Gaussian to those samples
+        (empirical mean + std) and measure KL against the real-data prior p.
+        This penalises the WM whenever its predicted latents drift away from
+        the region where real DINOv2 latents live — which is precisely the
+        mechanism that causes autoregressive drift.
+    """
+    # Flatten to (B*(T-1), 384) — treat every predicted step as one sample
+    B, T_minus1, D = pred_next.shape
+    flat = pred_next.reshape(-1, D)  # (N, 384)
+
+    # Empirical mean and std of WM predictions
+    mu_q  = flat.mean(dim=0)                   # (384,)
+    std_q = flat.std(dim=0).clamp(min=1e-4)    # (384,)
+
+    # Build distributions
+    q = Normal(mu_q,      std_q)
+    p = Normal(mu_prior,  std_prior)
+
+    # KL(q || p): shape (384,), then mean over dimensions
+    kl = kl_divergence(q, p).mean()
+
+    return kl
+
 
 # ── Components factory ────────────────────────────────────────────────────────
 
@@ -118,7 +249,6 @@ def build_components(device: torch.device, use_real: bool):
 def load_buffer_from_disk(buffer: "LatentReplayBuffer", processed_dir: Path) -> int:
     """
     Populate buffer from .npz latent files produced by Member C's pipeline.
-    Each file must contain key 'latents' with shape (episode_len, 384).
     Returns number of episodes loaded.
     """
     import numpy as np
@@ -129,27 +259,27 @@ def load_buffer_from_disk(buffer: "LatentReplayBuffer", processed_dir: Path) -> 
         return 0
 
     loaded = 0
-    
+
     for fpath in files:
         data = np.load(fpath)
         if "latents" not in data:
             print(f"[SKIP] {fpath.name} — missing 'latents' key")
             continue
-        
+
         missing = [k for k in ("actions", "rewards", "dones") if k not in data]
         if missing:
             print(f"[SKIP] {fpath.name} — missing keys: {missing}")
             continue
 
         buffer.add_episode(
-            latents = data["latents"],   # (T, 384)
-            actions = data["actions"],   # (T, *action_shape)
-            rewards = data["rewards"],   # (T,)
-            dones   = data["dones"]      # (T,)
+            latents = data["latents"],
+            actions = data["actions"],
+            rewards = data["rewards"],
+            dones   = data["dones"]
         )
         loaded += 1
-        
-        data.close()  # Free memory immediately after loading each episode
+
+        data.close()
 
     print(f"[INFO] Loaded {loaded}/{len(files)} episodes | "
           f"Buffer steps: {buffer.total_steps}")
@@ -158,54 +288,72 @@ def load_buffer_from_disk(buffer: "LatentReplayBuffer", processed_dir: Path) -> 
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
-def train_epoch(model, buffer, optimizer, loss_fn, device,
-                batch_size: int, batches_per_epoch: int) -> dict:
-    """One full epoch. Returns loss statistics dict."""
+def train_epoch(
+    model, buffer, optimizer, loss_fn, device,
+    batch_size: int,
+    batches_per_epoch: int,
+    # KL REGULARISATION (E.1): new parameters
+    kl_weight:  float,
+    mu_prior:   torch.Tensor,
+    std_prior:  torch.Tensor,
+) -> dict:
+    """
+    One full epoch. Returns loss statistics dict.
+
+    KL REGULARISATION (E.1):
+        kl_weight  — β coefficient. 0.0 disables KL term entirely (CDR baseline).
+        mu_prior   — (384,) prior mean fitted from real buffer before training.
+        std_prior  — (384,) prior std  fitted from real buffer before training.
+    """
     model.train()
-    
-    losses = []
+
+    losses        = []
     losses_latent = []
     losses_reward = []
-    losses_done = []
+    losses_done   = []
+    # KL REGULARISATION (E.1): track KL loss separately for logging
+    losses_kl     = []
 
     for _ in range(batches_per_epoch):
-        # A. Sample latents from buffer - now unpacks all four fields ─────────────────────────────────────
-        batch = buffer.sample(batch_size, seq_len=SEQ_LEN)
+        # A. Sample latents from buffer ────────────────────────────────────────
+        batch   = buffer.sample(batch_size, seq_len=SEQ_LEN)
         latents = batch.latents.to(device)
         actions = batch.actions.long().to(device)
         rewards = batch.rewards.to(device)
-        dones = batch.dones.to(device)
+        dones   = batch.dones.to(device)
 
-        # B. Shifted next-step prediction ───────────────────────────────────
-        z_in     = latents[:, :-1]     # (B, T-1, 384) — context
-        a_in     = actions[:, :-1]     # (B, T-1)
-        z_target = latents[:, 1:]      # (B, T-1, 384) — ground truth next latent
-        r_target = rewards[:, 1:].unsqueeze(-1) # (B, T-1, 1) — ground truth next reward
-        d_target = dones[:, 1:].unsqueeze(-1)   # (B, T-1, 1) — ground truth next done flag
-        
-        # C. Forward + loss ─────────────────────────────────────────────────
+        # B. Shifted next-step prediction ─────────────────────────────────────
+        z_in     = latents[:, :-1]                  # (B, T-1, 384)
+        a_in     = actions[:, :-1]                  # (B, T-1)
+        z_target = latents[:, 1:]                   # (B, T-1, 384)
+        r_target = rewards[:, 1:].unsqueeze(-1)     # (B, T-1, 1)
+        d_target = dones[:, 1:].unsqueeze(-1)       # (B, T-1, 1)
+
+        # C. Forward + loss ────────────────────────────────────────────────────
         optimizer.zero_grad()
         pred_next, pred_rew, pred_done = model(z_in, a_in)
-        
-        
-        # binary_cross_entropy_with_logits not binary_cross_entropy 
-        # — the model's done head outputs raw logits, so the _with_logits 
-        # variant is numerically safer (fuses sigmoid + BCE in one pass). 
-        # The .clamp(0, 1) on d_target is a safety guard in case dones 
-        # arrive as floats slightly outside that range.
-        
-        
+
         loss_latent = loss_fn(pred_next, z_target)
         loss_reward = nn.functional.mse_loss(pred_rew, r_target)
         loss_done   = nn.functional.binary_cross_entropy_with_logits(
                           pred_done, d_target.clamp(0, 1)
                       )
 
+        # KL REGULARISATION (E.1): ─────────────────────────────────────────────
+        # Compute KL between WM predicted latent distribution and real prior.
+        # When kl_weight=0.0 this branch is skipped entirely — zero overhead
+        # for the CDR baseline reproduction run.
+        if kl_weight > 0.0:
+            loss_kl = kl_loss_fn(pred_next, mu_prior, std_prior)
+        else:
+            loss_kl = torch.tensor(0.0, device=device)
+
         loss = (LAMBDA_LATENT * loss_latent
               + LAMBDA_REWARD * loss_reward
-              + LAMBDA_DONE   * loss_done)
-        
-        # D. Backward ───────────────────────────────────────────────────────
+              + LAMBDA_DONE   * loss_done
+              + kl_weight     * loss_kl)       # KL REGULARISATION (E.1)
+
+        # D. Backward ──────────────────────────────────────────────────────────
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -214,6 +362,7 @@ def train_epoch(model, buffer, optimizer, loss_fn, device,
         losses_latent.append(loss_latent.item())
         losses_reward.append(loss_reward.item())
         losses_done.append(loss_done.item())
+        losses_kl.append(loss_kl.item())       # KL REGULARISATION (E.1)
 
     n = len(losses)
     return {
@@ -223,6 +372,7 @@ def train_epoch(model, buffer, optimizer, loss_fn, device,
         "avg_loss_latent": sum(losses_latent) / n,
         "avg_loss_reward": sum(losses_reward) / n,
         "avg_loss_done":   sum(losses_done)   / n,
+        "avg_loss_kl":     sum(losses_kl)     / n,   # KL REGULARISATION (E.1)
     }
 
 
@@ -244,27 +394,29 @@ def save_checkpoint(model, optimizer, epoch: int, metrics: dict,
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train Latent World Model (E.2/E.3/E.4)")
-    p.add_argument("--epochs",            type=int, default=50)
-    p.add_argument("--batches_per_epoch", type=int, default=200)
-    p.add_argument("--batch_size",        type=int, default=32)
-    p.add_argument("--data_dir",          type=str, default="data/processed",
-                   help="Dir with pre-encoded .npz latent files (Member C output)")
-    p.add_argument("--save_dir",          type=str, default="checkpoints")
-    p.add_argument("--save_every",        type=int, default=10,
-                   help="Save a numbered checkpoint every N epochs")
-    p.add_argument("--log_file",          type=str, default="training_log.json")
-    p.add_argument("--smoke_test",        action="store_true",
-                   help="E.3: run 1 epoch × 10 batches and exit cleanly")
-    p.add_argument("--mock",              action="store_true",
-                   help="Force mock stubs (no partner code required)")
+    p = argparse.ArgumentParser(description="Train Latent World Model (E.1/E.2/E.3/E.4)")
+    p.add_argument("--epochs",            type=int,   default=50)
+    p.add_argument("--batches_per_epoch", type=int,   default=200)
+    p.add_argument("--batch_size",        type=int,   default=32)
+    p.add_argument("--data_dir",          type=str,   default="data/processed")
+    p.add_argument("--save_dir",          type=str,   default="checkpoints")
+    p.add_argument("--save_every",        type=int,   default=10)
+    p.add_argument("--log_file",          type=str,   default="training_log.json")
+    p.add_argument("--smoke_test",        action="store_true")
+    p.add_argument("--mock",              action="store_true")
+    # KL REGULARISATION (E.1): ─────────────────────────────────────────────────
+    # β coefficient for KL loss term.
+    # 0.01  — default for the KL reg experiment run (E.1).
+    # 0.0   — reproduces CDR baseline exactly (KL term disabled).
+    # Try 0.001 and 0.1 if 0.01 does not reduce drift.
+    p.add_argument("--kl_weight",         type=float, default=KL_WEIGHT_DEFAULT,
+                   help="KL regularisation weight β. 0.0 = CDR baseline (no KL).")
     return p.parse_args()
 
 
 def main():
-    args   = parse_args()
+    args = parse_args()
 
-    # E.3 smoke-test overrides ─────────────────────────────────────────────────
     if args.smoke_test:
         print("=" * 58)
         print("  E.3 SMOKE TEST — 1 epoch, 10 batches (integration check)")
@@ -278,15 +430,22 @@ def main():
     print(f"[INFO] Batches/epoch : {args.batches_per_epoch}")
     print(f"[INFO] Real buffer   : {_REAL_BUFFER and not args.mock}")
     print(f"[INFO] Real model    : {_REAL_MODEL and not args.mock}")
+    # KL REGULARISATION (E.1)
+    print(f"[INFO] KL weight (β) : {args.kl_weight}"
+          + ("  ← KL DISABLED (CDR baseline)" if args.kl_weight == 0.0
+             else "  ← KL ENABLED (E.1 fix)"))
 
     use_real = not args.mock
     buffer, model, optimizer, scheduler, loss_fn = build_components(device, use_real)
 
-    # Load latent data from disk ───────────────────────────────────────────────
     if use_real and _REAL_BUFFER:
         load_buffer_from_disk(buffer, Path(args.data_dir))
 
-    # Training loop ────────────────────────────────────────────────────────────
+    # KL REGULARISATION (E.1): fit prior from real buffer BEFORE training starts.
+    # This is done once — the prior is fixed for the entire training run.
+    # Fitting happens after the buffer is loaded so we use the actual data.
+    mu_prior, std_prior = compute_prior_gaussian(buffer, device)
+
     save_dir  = Path(args.save_dir)
     log       = []
     best_loss = float("inf")
@@ -300,6 +459,10 @@ def main():
         stats = train_epoch(
             model, buffer, optimizer, loss_fn,
             device, args.batch_size, args.batches_per_epoch,
+            # KL REGULARISATION (E.1)
+            kl_weight = args.kl_weight,
+            mu_prior  = mu_prior,
+            std_prior = std_prior,
         )
         scheduler.step()
 
@@ -311,17 +474,17 @@ def main():
             f"total={stats['avg_loss']:.4f}  "
             f"latent={stats['avg_loss_latent']:.4f}  "
             f"rew={stats['avg_loss_reward']:.4f}  "
-            f"done={stats['avg_loss_done']:.4f}  |  "
+            f"done={stats['avg_loss_done']:.4f}  "
+            # KL REGULARISATION (E.1): KL loss printed every epoch
+            f"kl={stats['avg_loss_kl']:.4f}  |  "
             f"lr={lr_now:.2e}  |  {elapsed:.1f}s"
         )
 
-        # Best checkpoint ──────────────────────────────────────────────────────
         if stats["avg_loss"] < best_loss:
             best_loss = stats["avg_loss"]
             p = save_checkpoint(model, optimizer, epoch, stats, save_dir, "best")
             print(f"  ✔ Best checkpoint → {p}")
 
-        # Periodic checkpoint ──────────────────────────────────────────────────
         if epoch % args.save_every == 0:
             p = save_checkpoint(model, optimizer, epoch, stats, save_dir,
                                 f"epoch{epoch:04d}")
@@ -329,21 +492,18 @@ def main():
 
         log.append({"epoch": epoch, "lr": lr_now, **stats})
 
-    # Final weights ────────────────────────────────────────────────────────────
     final = save_checkpoint(model, optimizer, args.epochs, log[-1],
                             save_dir, "final")
     print(f"\n[INFO] Final weights saved → {final}")
     print(f"[INFO] Training time       → {(time.time()-t_start)/60:.1f} min")
     print(f"[INFO] Best avg loss       → {best_loss:.6f}")
 
-    # JSON log for Member D ────────────────────────────────────────────────────
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as f:
         json.dump(log, f, indent=2)
     print(f"[INFO] Training log        → {log_path}")
 
-    # E.3 pass banner ──────────────────────────────────────────────────────────
     if args.smoke_test:
         print("\n" + "=" * 58)
         print("  ✅  E.3 PASSED — Pipeline ran 1 epoch without crash.")

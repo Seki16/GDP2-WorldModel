@@ -351,6 +351,17 @@ def latent_mse_loss(pred_latents, target_latents):
 
 
 """
+Smooth L1 Loss Function
+"""
+
+def latent_smooth_l1_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """
+    Calculate Smooth L1 loss (Huber loss) between predicted and target latents for training the world model.
+    """
+    return nn.functional.smooth_l1_loss(pred, target)
+
+
+"""
 Score action sequences
 """
 def score_action_sequences(pred_rewards, gamma=0.99):
@@ -523,7 +534,7 @@ def train_step(model, optimizer, latents, actions, device=torch.device("cpu")):
     pred_next_latents, pred_rewards, pred_values = model(z_in, a_in)
     
     # Compute latent MSE
-    loss_latent = latent_mse_loss(pred_next_latents, z_target)
+    loss_latent = latent_smooth_l1_loss(pred_next_latents, z_target)
     # loss_reward = F.mse_loss(pred_rewards, reward_targets)
     # loss_value = F.mse_loss(pred_values, value_targets)
     

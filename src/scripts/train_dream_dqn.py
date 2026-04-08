@@ -245,7 +245,7 @@ def collect_dyna_transitions(
                 z_next = pred_next[:, -1:, :]   # (1, 1, 384)
                 r_next = float(pred_rew[:, -1, 0].item())
                 d_next = float(torch.sigmoid(pred_done[:, -1, 0]).item())
-                done   = d_next > 0.75
+                done   = d_next > 0.9
 
                 # Push transition
                 replay_buf.push(Transition(

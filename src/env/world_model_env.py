@@ -250,8 +250,8 @@ class WorldModelEnv(gym.Env):
         return self._z_to_obs(self._z), info
 
     def step(
-        self,
-        action: int | np.integer,
+    self,
+    action: int | np.integer,
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
 
         if self._z is None:
@@ -281,29 +281,48 @@ class WorldModelEnv(gym.Env):
                 and self._step_count % self.re_anchor_every == 0):
             z_next = self._sample_real_latent()
 
-        self._z = z_next
+        # ── Member B: Delta thresholding — wall collision detection ───────────
+        # If the WM predicts near-zero latent change, treat as wall collision.
+        # Diagnostic showed wall hits cluster at delta ~0.03-0.12 while
+        # genuine movements are always above 0.34. Threshold 0.25 cleanly
+        # separates the two distributions with no retraining required.
+        predicted_delta = torch.norm(
+            z_next.squeeze() - self._z.squeeze()
+        ).item()
 
-        # ── Reward ────────────────────────────────────────────────────────────
-        wm_reward = float(pred_rew[:, -1, 0].item())
+        wall_hit = predicted_delta < 0.25
+
+        if wall_hit:
+            z_next    = self._z.clone()  # latent unchanged — agent didn't move
+            wm_reward = -0.1             # wall collision penalty
+        else:
+            self._z   = z_next
+            # ── Reward ────────────────────────────────────────────────────────
+            wm_reward = float(pred_rew[:, -1, 0].item())
+            wm_reward = float(np.clip(wm_reward, -0.15, 1.0))
+
+        self._z = z_next
 
         # ── 3c: Shaped reward ─────────────────────────────────────────────────
         shaped = 0.0
         if self.shaped_reward_w > 0.0 and self._z_goal is not None:
-            dist    = torch.norm(self._z.squeeze() - self._z_goal).item()
-            shaped  = -dist * self.shaped_reward_w
+            dist   = torch.norm(self._z.squeeze() - self._z_goal).item()
+            shaped = -dist * self.shaped_reward_w
 
         reward = wm_reward + shaped
 
         # ── Termination ───────────────────────────────────────────────────────
         done_logit  = float(pred_done[:, -1, 0].item())
-        terminated  = False #done_logit > 0.0
+        terminated  = done_logit > -5.0
         truncated   = (not terminated) and (self._step_count >= self.max_steps)
 
         info = {
-            "step":       self._step_count,
-            "done_logit": done_logit,
-            "wm_reward":  wm_reward,
-            "shaped":     shaped,
+            "step":            self._step_count,
+            "done_logit":      done_logit,
+            "wm_reward":       wm_reward,
+            "shaped":          shaped,
+            "wall_hit":        wall_hit,
+            "predicted_delta": predicted_delta,
         }
         return self._z_to_obs(self._z), reward, terminated, truncated, info
 

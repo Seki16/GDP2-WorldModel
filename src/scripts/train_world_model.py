@@ -77,8 +77,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from src.models.transformer import latent_smooth_l1_loss
-
 # ── Real imports (Members B & C deliverables) ─────────────────────────────────
 try:
     from src.data.buffer import LatentReplayBuffer
@@ -278,7 +276,7 @@ def build_components(device: torch.device, use_real: bool):
     if use_real and _REAL_MODEL:
         config  = Config()
         model   = DinoWorldModel(config).to(device)
-        loss_fn = latent_smooth_l1_loss
+        loss_fn = latent_mse_loss
     else:
         model   = _MockModel().to(device)
         loss_fn = _mock_mse
@@ -507,6 +505,25 @@ def parse_args():
         ),
     )
 
+    # ── Resume from checkpoint (Member B) ────────────────────────────────────
+    p.add_argument(
+        "--resume", type=str, default=None,
+        help=(
+            "Path to a checkpoint to resume training from. "
+            "Loads model weights (and optionally optimizer state) before "
+            "training begins. Use this to continue from joint training: "
+            "--resume checkpoints/world_model_joint_best.pt"
+        ),
+    )
+    p.add_argument(
+        "--resume_optimizer", action="store_true",
+        help=(
+            "Also restore optimizer state from the resume checkpoint. "
+            "Use this when resuming an interrupted run. "
+            "Leave unset when resuming from joint training (different optimizer state)."
+        ),
+    )
+
     return p.parse_args()
 
 
@@ -536,6 +553,35 @@ def main():
 
     use_real = not args.mock
     buffer, model, optimizer, scheduler, loss_fn = build_components(device, use_real)
+
+    # ── Resume from checkpoint ────────────────────────────────────────────────
+    if args.resume is not None:
+        resume_path = Path(args.resume)
+        if not resume_path.exists():
+            raise FileNotFoundError(
+                f"Resume checkpoint not found: {resume_path}"
+            )
+        print(f"[INFO] Resuming from  : {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device)
+
+        # Load model weights — always
+        state_dict = ckpt.get("model_state", ckpt)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[WARN] Missing keys (random-init): {len(missing)}")
+        if unexpected:
+            print(f"[WARN] Unexpected keys (ignored): {len(unexpected)}")
+
+        # Load optimizer state — only if requested
+        if args.resume_optimizer and "optim_state" in ckpt:
+            optimizer.load_state_dict(ckpt["optim_state"])
+            print(f"[INFO] Optimizer state restored")
+        else:
+            print(f"[INFO] Optimizer state reset (fresh LR schedule)")
+
+        resumed_epoch = ckpt.get("epoch", "?")
+        resumed_loss  = ckpt.get("metrics", {}).get("avg_loss", float("nan"))
+        print(f"[INFO] Resumed from epoch={resumed_epoch}  loss={resumed_loss:.6f}")
 
     # Load latent data from disk ───────────────────────────────────────────────
     if use_real and _REAL_BUFFER:

@@ -45,9 +45,9 @@ class TransformerWMConfiguration:
 
     # ── Free parameters (current best-known defaults) ─────────
     SEQUENCE_LENGTH = 24
-    NUM_LAYERS      = 2
+    NUM_LAYERS      = 8 # 2
     NUM_HEADS       = 8
-    MLP_RATIO       = 2
+    MLP_RATIO       = 4 # 2
     LEARNING_RATE   = 3e-4
 
     # ── KL Regularisation (Member B — Final Sprint) ───────────
@@ -63,8 +63,8 @@ class TransformerWMConfiguration:
     @classmethod
     def from_params(
         cls,
-        num_heads:       int   = 4,
-        num_layers:      int   = 4,
+        num_heads:       int   = 8,
+        num_layers:      int   = 8,
         mlp_ratio:       int   = 4,
         learning_rate:   float = 1e-4,
         sequence_length: int   = 16,

@@ -325,7 +325,7 @@ def load_world_model(checkpoint_path: str | None, device: torch.device):
         print(f"[WARN] Checkpoint not found at {path} — using random stub")
         return None
 
-    config = Config()
+    config = Config.from_params(num_layers=8, mlp_ratio=4, num_heads=8, learning_rate=3e-4, sequence_length=24)
     model  = DinoWorldModel(config).to(device)
     ckpt   = torch.load(path, map_location=device)
     missing, unexpected = model.load_state_dict(ckpt["model_state"], strict=False)

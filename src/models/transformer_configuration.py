@@ -23,6 +23,19 @@ class TransformerWMConfiguration:
         config = TransformerWMConfiguration()
         model  = DinoWorldModel(config)
     is completely unaffected.
+
+    ─────────────────────────────────────────────────────────────
+    MODIFICATION — Member B (KL Regularisation, Final Sprint)
+    ─────────────────────────────────────────────────────────────
+    Added KL_WEIGHT (β) to control the strength of the KL divergence
+    regularisation loss added to train_world_model.py.
+
+    KL loss penalises predicted latents for diverging from a Gaussian
+    prior fitted to real buffer latents, targeting autoregressive drift
+    at the source (training time rather than inference time).
+
+    Set KL_WEIGHT = 0.0 to disable KL regularisation entirely and
+    reproduce the original CDR training behaviour.
     ─────────────────────────────────────────────────────────────
     """
 
@@ -32,21 +45,30 @@ class TransformerWMConfiguration:
 
     # ── Free parameters (current best-known defaults) ─────────
     SEQUENCE_LENGTH = 24
-    NUM_LAYERS      = 2
+    NUM_LAYERS      = 8 # 2
     NUM_HEADS       = 8
-    MLP_RATIO       = 2
+    MLP_RATIO       = 4 # 2
     LEARNING_RATE   = 3e-4
+
+    # ── KL Regularisation (Member B — Final Sprint) ───────────
+    # β weight for KL divergence loss term in train_world_model.py.
+    # Penalises predicted latents for diverging from a Gaussian prior
+    # fitted to the real buffer latent distribution each batch.
+    # Range guidance: 1e-4 (gentle) → 1e-2 (aggressive).
+    # Start at 1e-3 and tune based on latent_drift_kl_B.png results.
+    KL_WEIGHT       = 1e-3
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @classmethod
     def from_params(
         cls,
-        num_heads:       int   = 4,
-        num_layers:      int   = 4,
+        num_heads:       int   = 8,
+        num_layers:      int   = 8,
         mlp_ratio:       int   = 4,
         learning_rate:   float = 1e-4,
         sequence_length: int   = 16,
+        kl_weight:       float = 5e-3,
     ) -> "TransformerWMConfiguration":
         """
         Create a config instance with explicit hyperparameter values.
@@ -66,6 +88,8 @@ class TransformerWMConfiguration:
             mlp_ratio:       MLP expansion ratio inside each block.
             learning_rate:   Adam learning rate.
             sequence_length: Context window length (steps).
+            kl_weight:       β weight for KL divergence regularisation loss.
+                             0.0 disables KL regularisation.
 
         Returns:
             A TransformerWMConfiguration instance with overridden params.
@@ -86,4 +110,5 @@ class TransformerWMConfiguration:
         cfg.MLP_RATIO        = mlp_ratio
         cfg.LEARNING_RATE    = learning_rate
         cfg.SEQUENCE_LENGTH  = sequence_length
+        cfg.KL_WEIGHT        = kl_weight
         return cfg

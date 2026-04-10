@@ -112,9 +112,16 @@ class MazeEnv(gym.Env):
 
         terminated = self.agent_pos == self.goal_pos
         truncated = self.steps >= self.config.max_steps
-        reward = 1.0 if terminated else -0.01
+        if terminated:
+            reward = 1.0
+        elif self.agent_pos == [x, y]:  # position unchanged — wall hit
+            reward = -0.1
+        else:
+            reward = -0.01
 
         return self._get_obs(), reward, terminated, truncated, {"pos": tuple(self.agent_pos)}
 
     def render(self):
         return self._get_obs()
+    
+    

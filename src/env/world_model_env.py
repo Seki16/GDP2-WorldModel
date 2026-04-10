@@ -293,15 +293,12 @@ class WorldModelEnv(gym.Env):
         wall_hit = predicted_delta < 0.25
 
         if wall_hit:
-            z_next    = self._z.clone()  # latent unchanged — agent didn't move
-            wm_reward = -0.1             # wall collision penalty
+            z_next    = self._z.clone()
+            wm_reward = -0.1
         else:
-            self._z   = z_next
-            # ── Reward ────────────────────────────────────────────────────────
-            wm_reward = float(pred_rew[:, -1, 0].item())
-            wm_reward = float(np.clip(wm_reward, -0.15, 1.0))
+            wm_reward = float(np.clip(pred_rew[:, -1, 0].item(), -0.15, 1.0))
 
-        self._z = z_next
+        self._z = z_next   # single update, always correct
 
         # ── 3c: Shaped reward ─────────────────────────────────────────────────
         shaped = 0.0
@@ -313,7 +310,8 @@ class WorldModelEnv(gym.Env):
 
         # ── Termination ───────────────────────────────────────────────────────
         done_logit  = float(pred_done[:, -1, 0].item())
-        terminated  = done_logit > -5.0
+        done_prob  = torch.sigmoid(pred_done[:, -1, 0]).item()
+        terminated = done_prob > 0.9
         truncated   = (not terminated) and (self._step_count >= self.max_steps)
 
         info = {

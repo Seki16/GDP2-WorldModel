@@ -274,14 +274,14 @@ def build_components(device: torch.device, use_real: bool):
               else _MockBuffer()
 
     if use_real and _REAL_MODEL:
-        config  = Config()
-        model   = DinoWorldModel(config).to(device)
+        config = Config.from_params(num_layers=8, mlp_ratio=4, num_heads=8, learning_rate=3e-4, sequence_length=24)
+        model  = DinoWorldModel(config).to(device)
         loss_fn = latent_mse_loss
     else:
         model   = _MockModel().to(device)
         loss_fn = _mock_mse
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-6)
     return buffer, model, optimizer, scheduler, loss_fn
 

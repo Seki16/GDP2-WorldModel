@@ -41,7 +41,7 @@ SEQ_LEN    = 24
 
 def load_model(checkpoint_path: str, device: torch.device) -> DinoWorldModel:
     """Load trained world model from checkpoint."""
-    config = Config()
+    config = Config.from_params(num_layers=8, mlp_ratio=4, num_heads=8, learning_rate=3e-4, sequence_length=24)
     model  = DinoWorldModel(config).to(device)
     ckpt   = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(ckpt["model_state"], strict=False)

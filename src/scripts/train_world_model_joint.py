@@ -644,7 +644,7 @@ def main():
     if not _REAL_MODEL:
         raise RuntimeError("src.models.transformer required.")
 
-    config = Config()
+    config = Config.from_params(num_layers=8, mlp_ratio=4, num_heads=8, learning_rate=3e-4, sequence_length=24)
     model  = DinoWorldModel(config).to(device)
 
     # ── Optimizers ────────────────────────────────────────────────────────────
